@@ -23,6 +23,7 @@
         manager = import ./nix/module.nix;
         indexer = import ./nix/module.nix;
         dashboard = import ./nix/module.nix;
+        filebeat = import ./nix/module.nix;
       };
 
       checks = forAllSystems (
@@ -33,6 +34,7 @@
         packagesFor system
         // {
           module-evaluation = import ./tests/module-evaluation.nix { inherit pkgs; };
+          central-stack = import ./tests/central-stack.nix { inherit pkgs; };
         }
       );
 

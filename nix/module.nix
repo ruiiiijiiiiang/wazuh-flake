@@ -19,6 +19,16 @@ let
         [ "@MANAGER_ADDRESS@" "@MANAGER_PORT@" "@ENROLLMENT_PORT@" ]
         [ cfg.agent.managerAddress (toString cfg.agent.managerPort) (toString cfg.agent.enrollmentPort) ]
         (lib.readFile ./ossec.conf);
+  filebeatConfig =
+    if cfg.filebeat.config != "" then
+      cfg.filebeat.config
+    else
+      lib.replaceStrings
+        [ "@CONFIG_DIR@" "@INDEXER_URL@" ]
+        [ cfg.filebeat.configDir cfg.filebeat.indexerUrl ]
+        (lib.readFile ./filebeat.yml);
+  filebeatConfigFile = pkgs.writeText "wazuh-filebeat.yml" filebeatConfig;
+  indexerConfigFile = pkgs.writeText "wazuh-indexer.yml" cfg.indexer.config;
   dashboardConfig =
     if cfg.dashboard.config != "" then
       cfg.dashboard.config
@@ -46,6 +56,10 @@ let
           )
         ]
         (lib.readFile ./opensearch_dashboards.yml);
+  dashboardConfigFile = pkgs.writeText "opensearch_dashboards.yml" dashboardConfig;
+  dashboardAppSettingsFile = pkgs.writeText "wazuh-dashboard-app-settings.json" (
+    builtins.toJSON cfg.dashboard.appSettings
+  );
   indexerHealthHost =
     if cfg.indexer.bindAddress == "0.0.0.0" then
       "127.0.0.1"
@@ -153,6 +167,72 @@ in
       };
     };
 
+    filebeat = {
+      enable = mkEnableOption "Wazuh Filebeat alert forwarding";
+      package = mkOption {
+        type = types.package;
+        default = packages.filebeat;
+        description = "Filebeat package with the Wazuh module and index template.";
+      };
+      configDir = mkOption {
+        type = types.path;
+        default = "/etc/filebeat";
+        description = "Mutable Filebeat configuration directory.";
+      };
+      dataDir = mkOption {
+        type = types.path;
+        default = "/var/lib/filebeat";
+        description = "Persistent Filebeat registry and data directory.";
+      };
+      logDir = mkOption {
+        type = types.path;
+        default = "/var/log/filebeat";
+        description = "Filebeat log directory.";
+      };
+      indexerUrl = mkOption {
+        type = types.str;
+        default = "https://127.0.0.1:9200";
+        description = "Wazuh indexer URL receiving alerts.";
+      };
+      config = mkOption {
+        type = types.lines;
+        default = "";
+        description = "Complete filebeat.yml; a Wazuh alerts configuration is generated when empty.";
+      };
+      environmentFile = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        description = "Environment file containing INDEXER_USERNAME and INDEXER_PASSWORD.";
+      };
+      requireManager = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Require the local Wazuh manager before forwarding alerts.";
+      };
+      requireIndexer = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Require the local Wazuh indexer before forwarding alerts.";
+      };
+      certificates = {
+        rootCA = mkOption {
+          type = types.nullOr types.path;
+          default = null;
+          description = "Certificate authority used to verify the Wazuh indexer.";
+        };
+        certificate = mkOption {
+          type = types.nullOr types.path;
+          default = null;
+          description = "Filebeat client certificate accepted by the Wazuh indexer.";
+        };
+        key = mkOption {
+          type = types.nullOr types.path;
+          default = null;
+          description = "Filebeat client private key.";
+        };
+      };
+    };
+
     indexer = {
       enable = mkEnableOption "Wazuh indexer";
       package = mkOption {
@@ -249,8 +329,23 @@ in
       };
       managerApiUrl = mkOption {
         type = types.str;
-        default = "https://127.0.0.1:55000";
-        description = "Wazuh manager API URL.";
+        default = "https://127.0.0.1";
+        description = "Wazuh manager API URL without its port.";
+      };
+      managerApiPort = mkOption {
+        type = types.port;
+        default = 55000;
+        description = "Wazuh manager API port.";
+      };
+      managerApiRunAs = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Use the authenticated dashboard user when calling the Wazuh API.";
+      };
+      appSettings = mkOption {
+        type = types.attrs;
+        default = { };
+        description = "Non-secret Wazuh dashboard application settings merged with the runtime API host.";
       };
       requireManager = mkOption {
         type = types.bool;
@@ -274,7 +369,10 @@ in
       environmentFile = mkOption {
         type = types.nullOr types.path;
         default = null;
-        description = "Optional environment file for dashboard credentials and integrations.";
+        description = ''
+          Environment file containing DASHBOARD_USERNAME, DASHBOARD_PASSWORD,
+          API_USERNAME, and API_PASSWORD.
+        '';
       };
       openFirewall = mkOption {
         type = types.bool;
@@ -318,6 +416,11 @@ in
         }
         {
           assertion =
+            !cfg.manager.enable || !cfg.manager.requireIndexer || cfg.manager.environmentFile != null;
+          message = "A manager requiring the indexer must set services.wazuh.manager.environmentFile.";
+        }
+        {
+          assertion =
             !cfg.manager.enable
             || (cfg.manager.certificates.certificate == null) == (cfg.manager.certificates.key == null);
           message = "Wazuh manager enrollment certificate and key must be configured together.";
@@ -327,12 +430,42 @@ in
           message = "services.wazuh.indexer.securityBootstrap requires services.wazuh.indexer.enable.";
         }
         {
+          assertion = !cfg.filebeat.enable || !cfg.filebeat.requireManager || cfg.manager.enable;
+          message = "services.wazuh.filebeat.requireManager requires services.wazuh.manager.enable.";
+        }
+        {
+          assertion = !cfg.filebeat.enable || !cfg.filebeat.requireIndexer || cfg.indexer.enable;
+          message = "services.wazuh.filebeat.requireIndexer requires services.wazuh.indexer.enable.";
+        }
+        {
+          assertion = !cfg.filebeat.enable || cfg.filebeat.environmentFile != null;
+          message = "services.wazuh.filebeat.environmentFile is required when Filebeat is enabled.";
+        }
+        {
+          assertion =
+            !cfg.filebeat.enable
+            || (
+              cfg.filebeat.certificates.rootCA != null
+              && cfg.filebeat.certificates.certificate != null
+              && cfg.filebeat.certificates.key != null
+            );
+          message = "Wazuh Filebeat requires its root CA, certificate, and key.";
+        }
+        {
           assertion = !cfg.dashboard.enable || !cfg.dashboard.requireManager || cfg.manager.enable;
           message = "services.wazuh.dashboard.requireManager requires services.wazuh.manager.enable.";
         }
         {
           assertion = !cfg.dashboard.enable || cfg.indexer.enable;
           message = "services.wazuh.dashboard requires services.wazuh.indexer.enable.";
+        }
+        {
+          assertion = !cfg.dashboard.enable || cfg.dashboard.environmentFile != null;
+          message = "services.wazuh.dashboard.environmentFile is required when the dashboard is enabled.";
+        }
+        {
+          assertion = !cfg.dashboard.enable || cfg.dashboard.certificates.rootCA != null;
+          message = "The Wazuh dashboard requires the indexer root CA certificate.";
         }
         {
           assertion =
@@ -430,12 +563,14 @@ in
         wantedBy = [ "multi-user.target" ];
         requires =
           lib.optional cfg.manager.requireIndexer "wazuh-indexer.service"
-          ++ lib.optional cfg.indexer.securityBootstrap.enable "wazuh-indexer-security.service";
+          ++ lib.optional cfg.indexer.securityBootstrap.enable "wazuh-indexer-security.service"
+          ++ lib.optional cfg.filebeat.enable "wazuh-filebeat-prepare.service";
         after = [
           "network-online.target"
         ]
         ++ lib.optional cfg.manager.requireIndexer "wazuh-indexer.service"
-        ++ lib.optional cfg.indexer.securityBootstrap.enable "wazuh-indexer-security.service";
+        ++ lib.optional cfg.indexer.securityBootstrap.enable "wazuh-indexer-security.service"
+        ++ lib.optional cfg.filebeat.enable "wazuh-filebeat-prepare.service";
         wants = [ "network-online.target" ];
         path = [
           pkgs.coreutils
@@ -483,6 +618,11 @@ in
             ${lib.optionalString (cfg.manager.config != "") ''
               install -o root -g wazuh -m 0640 /etc/wazuh/manager.conf /var/ossec/etc/ossec.conf
             ''}
+            ${lib.optionalString (cfg.filebeat.enable && cfg.manager.config == "") ''
+              sed -i \
+                's#https://0.0.0.0:9200#${cfg.filebeat.indexerUrl}#g' \
+                /var/ossec/etc/ossec.conf
+            ''}
             ${lib.optionalString (cfg.manager.certificates.certificate != null) ''
               install -o root -g wazuh -m 0640 ${cfg.manager.certificates.certificate} /var/ossec/etc/sslmanager.cert
               install -o root -g wazuh -m 0640 ${cfg.manager.certificates.key} /var/ossec/etc/sslmanager.key
@@ -498,6 +638,12 @@ in
               chown root:wazuh /var/ossec/etc/sslmanager.cert /var/ossec/etc/sslmanager.key
               chmod 0640 /var/ossec/etc/sslmanager.cert /var/ossec/etc/sslmanager.key
             fi
+            ${lib.optionalString (cfg.manager.environmentFile != null) ''
+              : "''${INDEXER_USERNAME:?INDEXER_USERNAME must be set in the manager environment file}"
+              : "''${INDEXER_PASSWORD:?INDEXER_PASSWORD must be set in the manager environment file}"
+              printf '%s\n' "$INDEXER_USERNAME" | /var/ossec/bin/wazuh-keystore -f indexer -k username
+              printf '%s\n' "$INDEXER_PASSWORD" | /var/ossec/bin/wazuh-keystore -f indexer -k password
+            ''}
             printf '%s\n' "${cfg.manager.package}" > "$package_marker"
             chown root:wazuh "$package_marker"
             chmod 0640 "$package_marker"
@@ -522,6 +668,99 @@ in
       ++ lib.optional cfg.manager.openApiPort cfg.manager.apiPort;
     })
 
+    (mkIf cfg.filebeat.enable {
+      systemd.tmpfiles.rules = [
+        "d ${cfg.filebeat.configDir} 0750 root root -"
+        "d ${cfg.filebeat.configDir}/certs 0500 root root -"
+        "d ${cfg.filebeat.dataDir} 0750 root root -"
+        "d ${cfg.filebeat.logDir} 0750 root root -"
+      ];
+
+      systemd.services.wazuh-filebeat-prepare = {
+        description = "Prepare Wazuh Filebeat runtime files";
+        before = [ "wazuh-filebeat.service" ] ++ lib.optional cfg.manager.enable "wazuh-manager.service";
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+          EnvironmentFile = cfg.filebeat.environmentFile;
+          ExecStart = pkgs.writeShellScript "wazuh-filebeat-prepare" ''
+            set -eu
+            : "''${INDEXER_USERNAME:?INDEXER_USERNAME must be set in the Filebeat environment file}"
+            : "''${INDEXER_PASSWORD:?INDEXER_PASSWORD must be set in the Filebeat environment file}"
+
+            install -d -m 0750 -o root -g root ${cfg.filebeat.configDir}
+            install -d -m 0500 -o root -g root ${cfg.filebeat.configDir}/certs
+            install -d -m 0750 -o root -g root ${cfg.filebeat.dataDir} ${cfg.filebeat.logDir}
+            install -o root -g root -m 0640 ${filebeatConfigFile} ${cfg.filebeat.configDir}/filebeat.yml
+            install -o root -g root -m 0644 \
+              ${cfg.filebeat.package}/etc/filebeat/wazuh-template.json \
+              ${cfg.filebeat.configDir}/wazuh-template.json
+            install -o root -g root -m 0400 \
+              ${cfg.filebeat.certificates.rootCA} \
+              ${cfg.filebeat.configDir}/certs/root-ca.pem
+            install -o root -g root -m 0400 \
+              ${cfg.filebeat.certificates.certificate} \
+              ${cfg.filebeat.configDir}/certs/filebeat.pem
+            install -o root -g root -m 0400 \
+              ${cfg.filebeat.certificates.key} \
+              ${cfg.filebeat.configDir}/certs/filebeat-key.pem
+
+            filebeat=${cfg.filebeat.package}/usr/share/filebeat/bin/filebeat
+            rm -f ${cfg.filebeat.dataDir}/filebeat.keystore
+            "$filebeat" keystore create --force \
+              --path.home ${cfg.filebeat.package}/usr/share/filebeat \
+              --path.config ${cfg.filebeat.configDir} \
+              --path.data ${cfg.filebeat.dataDir} \
+              --path.logs ${cfg.filebeat.logDir}
+            printf '%s\n' "$INDEXER_USERNAME" | "$filebeat" keystore add username --stdin --force \
+              --path.home ${cfg.filebeat.package}/usr/share/filebeat \
+              --path.config ${cfg.filebeat.configDir} \
+              --path.data ${cfg.filebeat.dataDir} \
+              --path.logs ${cfg.filebeat.logDir}
+            printf '%s\n' "$INDEXER_PASSWORD" | "$filebeat" keystore add password --stdin --force \
+              --path.home ${cfg.filebeat.package}/usr/share/filebeat \
+              --path.config ${cfg.filebeat.configDir} \
+              --path.data ${cfg.filebeat.dataDir} \
+              --path.logs ${cfg.filebeat.logDir}
+            chmod 0600 ${cfg.filebeat.dataDir}/filebeat.keystore
+          '';
+        };
+      };
+
+      systemd.services.wazuh-filebeat = {
+        description = "Wazuh Filebeat alert forwarding";
+        wantedBy = [ "multi-user.target" ];
+        requires = [
+          "wazuh-filebeat-prepare.service"
+        ]
+        ++ lib.optional cfg.filebeat.requireManager "wazuh-manager.service"
+        ++ lib.optional cfg.filebeat.requireIndexer "wazuh-indexer.service"
+        ++ lib.optional cfg.indexer.securityBootstrap.enable "wazuh-indexer-security.service";
+        after = [
+          "network-online.target"
+          "wazuh-filebeat-prepare.service"
+        ]
+        ++ lib.optional cfg.filebeat.requireManager "wazuh-manager.service"
+        ++ lib.optional cfg.filebeat.requireIndexer "wazuh-indexer.service"
+        ++ lib.optional cfg.indexer.securityBootstrap.enable "wazuh-indexer-security.service";
+        wants = [ "network-online.target" ];
+        serviceConfig = {
+          Type = "simple";
+          ExecStart = "${cfg.filebeat.package}/usr/share/filebeat/bin/filebeat --environment systemd --path.home ${cfg.filebeat.package}/usr/share/filebeat --path.config ${cfg.filebeat.configDir} --path.data ${cfg.filebeat.dataDir} --path.logs ${cfg.filebeat.logDir} -c filebeat.yml -e";
+          Restart = "on-failure";
+          RestartSec = 5;
+          TimeoutStartSec = 120;
+          TimeoutStopSec = 30;
+          KillMode = "control-group";
+          UMask = "0077";
+          ReadWritePaths = [
+            cfg.filebeat.dataDir
+            cfg.filebeat.logDir
+          ];
+        };
+      };
+    })
+
     (mkIf cfg.indexer.enable {
       users.groups.wazuh-indexer = { };
       users.users.wazuh-indexer = {
@@ -533,12 +772,9 @@ in
       systemd.tmpfiles.rules = [
         "d ${cfg.indexer.dataDir} 0750 wazuh-indexer wazuh-indexer -"
         "d /var/log/wazuh-indexer 0750 wazuh-indexer wazuh-indexer -"
-        "d ${cfg.indexer.configDir} 0750 root wazuh-indexer -"
+        "d ${cfg.indexer.configDir} 0750 wazuh-indexer wazuh-indexer -"
         "d ${cfg.indexer.configDir}/certs 0500 wazuh-indexer wazuh-indexer -"
       ];
-      environment.etc = lib.mkIf (cfg.indexer.config != "") {
-        "wazuh-indexer/opensearch.yml".text = cfg.indexer.config;
-      };
       systemd.services.wazuh-indexer-prepare = {
         description = "Prepare Wazuh indexer runtime files";
         wantedBy = [ "multi-user.target" ];
@@ -548,7 +784,7 @@ in
           RemainAfterExit = true;
           ExecStart = pkgs.writeShellScript "wazuh-indexer-prepare" ''
             set -eu
-            install -d -m 0750 -o root -g wazuh-indexer ${cfg.indexer.configDir}
+            install -d -m 0750 -o wazuh-indexer -g wazuh-indexer ${cfg.indexer.configDir}
             if [ -d ${cfg.indexer.package}/etc/wazuh-indexer ]; then
               cp -a --no-clobber ${cfg.indexer.package}/etc/wazuh-indexer/. ${cfg.indexer.configDir}/
             fi
@@ -569,8 +805,23 @@ in
               install -o wazuh-indexer -g wazuh-indexer -m 0400 ${cfg.indexer.certificates.adminKey} ${cfg.indexer.configDir}/certs/admin-key.pem
             ''}
             ${lib.optionalString (cfg.indexer.config != "") ''
-              install -o root -g wazuh-indexer -m 0640 /etc/wazuh-indexer/opensearch.yml ${cfg.indexer.configDir}/opensearch.yml
+              install -o wazuh-indexer -g wazuh-indexer -m 0640 ${indexerConfigFile} ${cfg.indexer.configDir}/opensearch.yml
             ''}
+            chown -R wazuh-indexer:wazuh-indexer ${cfg.indexer.configDir}
+            ${pkgs.findutils}/bin/find ${cfg.indexer.configDir} -type d -exec chmod 0700 {} +
+            ${pkgs.findutils}/bin/find ${cfg.indexer.configDir} -type f -exec chmod 0600 {} +
+            if [ ! -e ${cfg.indexer.configDir}/opensearch.keystore ]; then
+              ${pkgs.util-linux}/bin/runuser -u wazuh-indexer -- \
+                ${pkgs.coreutils}/bin/env \
+                  OPENSEARCH_PATH_CONF=${cfg.indexer.configDir} \
+                  OPENSEARCH_JAVA_HOME=${cfg.indexer.package}/usr/share/wazuh-indexer/jdk \
+                  ${cfg.indexer.package}/usr/share/wazuh-indexer/bin/opensearch-keystore create
+            fi
+            ${pkgs.util-linux}/bin/runuser -u wazuh-indexer -- \
+              ${pkgs.coreutils}/bin/env \
+                OPENSEARCH_PATH_CONF=${cfg.indexer.configDir} \
+                OPENSEARCH_JAVA_HOME=${cfg.indexer.package}/usr/share/wazuh-indexer/jdk \
+                ${cfg.indexer.package}/usr/share/wazuh-indexer/bin/opensearch-keystore upgrade
             install -d -m 0750 -o wazuh-indexer -g wazuh-indexer ${cfg.indexer.dataDir}
           '';
         };
@@ -595,7 +846,8 @@ in
             for attempt in $(seq 1 60); do
               status=$(${pkgs.curl}/bin/curl -k -s -o /dev/null -w '%{http_code}' \
                 "https://${indexerHealthHost}:${toString cfg.indexer.port}/" || true)
-              if [ "$status" = 200 ] || [ "$status" = 401 ] || [ "$status" = 403 ]; then
+              # The security plugin returns 503 until securityadmin initializes it.
+              if [ "$status" = 200 ] || [ "$status" = 401 ] || [ "$status" = 403 ] || [ "$status" = 503 ]; then
                 exit 0
               fi
               sleep 2
@@ -609,10 +861,14 @@ in
           TimeoutStartSec = 180;
           TimeoutStopSec = 60;
           KillMode = "control-group";
+          ReadWritePaths = [
+            cfg.indexer.configDir
+            cfg.indexer.dataDir
+            "/var/log/wazuh-indexer"
+          ];
           Environment = [
             "OPENSEARCH_PATH_CONF=${cfg.indexer.configDir}"
             "OPENSEARCH_JAVA_HOME=${cfg.indexer.package}/usr/share/wazuh-indexer/jdk"
-            "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
           ];
         };
       };
@@ -627,6 +883,7 @@ in
         serviceConfig = {
           Type = "oneshot";
           RemainAfterExit = true;
+          Environment = "OPENSEARCH_JAVA_HOME=${cfg.indexer.package}/usr/share/wazuh-indexer/jdk";
           ExecStart = pkgs.writeShellScript "wazuh-indexer-security-bootstrap" ''
             set -eu
             if [ -e ${cfg.indexer.securityBootstrap.initializedFile} ]; then
@@ -657,9 +914,6 @@ in
         "d ${cfg.dashboard.configDir} 0750 root wazuh-dashboard -"
         "d ${cfg.dashboard.configDir}/certs 0500 wazuh-dashboard wazuh-dashboard -"
       ];
-      environment.etc = {
-        "wazuh-dashboard/opensearch_dashboards.yml".text = dashboardConfig;
-      };
       systemd.services.wazuh-dashboard-prepare = {
         description = "Prepare Wazuh dashboard runtime files";
         wantedBy = [ "multi-user.target" ];
@@ -667,12 +921,29 @@ in
         serviceConfig = {
           Type = "oneshot";
           RemainAfterExit = true;
+          EnvironmentFile = cfg.dashboard.environmentFile;
           ExecStart = pkgs.writeShellScript "wazuh-dashboard-prepare" ''
             set -eu
+            : "''${DASHBOARD_USERNAME:?DASHBOARD_USERNAME must be set in the dashboard environment file}"
+            : "''${DASHBOARD_PASSWORD:?DASHBOARD_PASSWORD must be set in the dashboard environment file}"
+            : "''${API_USERNAME:?API_USERNAME must be set in the dashboard environment file}"
+            : "''${API_PASSWORD:?API_PASSWORD must be set in the dashboard environment file}"
+
             install -d -m 0750 -o root -g wazuh-dashboard ${cfg.dashboard.configDir}
             if [ -d ${cfg.dashboard.package}/etc/wazuh-dashboard ]; then
               cp -a --no-clobber ${cfg.dashboard.package}/etc/wazuh-dashboard/. ${cfg.dashboard.configDir}/
             fi
+            chown root:wazuh-dashboard ${cfg.dashboard.configDir}
+            chmod 0750 ${cfg.dashboard.configDir}
+            install -d -m 0750 -o wazuh-dashboard -g wazuh-dashboard ${cfg.dashboard.dataDir}
+            if [ -d ${cfg.dashboard.package}/usr/share/wazuh-dashboard/data ]; then
+              cp -a --no-clobber \
+                ${cfg.dashboard.package}/usr/share/wazuh-dashboard/data/. \
+                ${cfg.dashboard.dataDir}/
+            fi
+            chown -R wazuh-dashboard:wazuh-dashboard ${cfg.dashboard.dataDir}
+            chmod -R u+rwX,g+rX,o-rwx ${cfg.dashboard.dataDir}
+
             install -d -m 0500 -o wazuh-dashboard -g wazuh-dashboard ${cfg.dashboard.configDir}/certs
             ${lib.optionalString (cfg.dashboard.certificates.rootCA != null) ''
               install -o wazuh-dashboard -g wazuh-dashboard -m 0400 ${cfg.dashboard.certificates.rootCA} ${cfg.dashboard.configDir}/certs/root-ca.pem
@@ -683,8 +954,33 @@ in
             ${lib.optionalString (cfg.dashboard.certificates.key != null) ''
               install -o wazuh-dashboard -g wazuh-dashboard -m 0400 ${cfg.dashboard.certificates.key} ${cfg.dashboard.configDir}/certs/dashboard-key.pem
             ''}
-            install -o root -g wazuh-dashboard -m 0640 /etc/wazuh-dashboard/opensearch_dashboards.yml ${cfg.dashboard.configDir}/opensearch_dashboards.yml
-            install -d -m 0750 -o wazuh-dashboard -g wazuh-dashboard ${cfg.dashboard.dataDir}
+            install -o root -g wazuh-dashboard -m 0640 ${dashboardConfigFile} ${cfg.dashboard.configDir}/opensearch_dashboards.yml
+
+            export OPENSEARCH_DASHBOARDS_PATH_CONF=${cfg.dashboard.configDir}
+            keystore=${cfg.dashboard.package}/usr/share/wazuh-dashboard/bin/opensearch-dashboards-keystore
+            rm -f ${cfg.dashboard.configDir}/opensearch_dashboards.keystore
+            "$keystore" create --allow-root
+            printf '%s\n' "$DASHBOARD_USERNAME" | \
+              "$keystore" add opensearch.username --stdin --allow-root
+            printf '%s\n' "$DASHBOARD_PASSWORD" | \
+              "$keystore" add opensearch.password --stdin --allow-root
+            chown wazuh-dashboard:wazuh-dashboard ${cfg.dashboard.configDir}/opensearch_dashboards.keystore
+            chmod 0600 ${cfg.dashboard.configDir}/opensearch_dashboards.keystore
+
+            install -d -m 0700 -o wazuh-dashboard -g wazuh-dashboard \
+              ${cfg.dashboard.dataDir}/wazuh \
+              ${cfg.dashboard.dataDir}/wazuh/config
+            ${pkgs.jq}/bin/jq \
+              --arg url ${lib.escapeShellArg cfg.dashboard.managerApiUrl} \
+              --argjson port ${toString cfg.dashboard.managerApiPort} \
+              --arg username "$API_USERNAME" \
+              --arg password "$API_PASSWORD" \
+              --argjson run_as ${if cfg.dashboard.managerApiRunAs then "true" else "false"} \
+              '. + {hosts: [{"1513629884013": {url: $url, port: $port, username: $username, password: $password, run_as: $run_as}}]}' \
+              ${dashboardAppSettingsFile} \
+              > ${cfg.dashboard.dataDir}/wazuh/config/wazuh.yml
+            chown wazuh-dashboard:wazuh-dashboard ${cfg.dashboard.dataDir}/wazuh/config/wazuh.yml
+            chmod 0600 ${cfg.dashboard.dataDir}/wazuh/config/wazuh.yml
           '';
         };
       };
@@ -736,11 +1032,7 @@ in
           KillMode = "control-group";
           Environment = [
             "OPENSEARCH_DASHBOARDS_PATH_CONF=${cfg.dashboard.configDir}"
-            "WAZUH_API_URL=${cfg.dashboard.managerApiUrl}"
           ];
-          EnvironmentFile = lib.optional (
-            cfg.dashboard.environmentFile != null
-          ) cfg.dashboard.environmentFile;
         };
       };
       networking.firewall.allowedTCPPorts = lib.optional cfg.dashboard.openFirewall cfg.dashboard.port;

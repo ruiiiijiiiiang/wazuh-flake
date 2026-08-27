@@ -1,0 +1,30 @@
+filebeat.modules:
+  - module: wazuh
+    alerts:
+      enabled: true
+    archives:
+      enabled: false
+
+setup.template.json.enabled: true
+setup.template.overwrite: true
+setup.template.json.path: "@CONFIG_DIR@/wazuh-template.json"
+setup.template.json.name: wazuh
+setup.ilm.enabled: false
+
+output.elasticsearch:
+  hosts: ["@INDEXER_URL@"]
+  username: "${username}"
+  password: "${password}"
+  ssl.verification_mode: certificate
+  ssl.certificate_authorities: ["@CONFIG_DIR@/certs/root-ca.pem"]
+  ssl.certificate: "@CONFIG_DIR@/certs/filebeat.pem"
+  ssl.key: "@CONFIG_DIR@/certs/filebeat-key.pem"
+
+logging.metrics.enabled: false
+
+seccomp:
+  default_action: allow
+  syscalls:
+    - action: allow
+      names:
+        - rseq

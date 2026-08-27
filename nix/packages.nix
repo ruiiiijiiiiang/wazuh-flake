@@ -8,20 +8,28 @@ let
 
   # Wazuh's official package repository uses amd64/arm64 for Debian packages.
   debArch = if pkgs.stdenv.hostPlatform.isAarch64 then "arm64" else "amd64";
+  filebeatVersion = "7.10.2";
+  filebeatModuleVersion = "0.4";
 
   hashes = {
     "4.14.5" = {
+      common = {
+        filebeatModule = "b0683f1d5d7c5d076ea3a565b0aa7ca92e6483f8a14e8b96799e6ee632da2284";
+        filebeatTemplate = "c6e30822c67c10f7e777cb51926e261d8b2c3a941c4ffcf83325f700c1c8802f";
+      };
       amd64 = {
         agent = "78d22932d6556974f67bd4884341609681dc632ea744dbd7255d704a5fd5d70d";
         manager = "2f9010e6c32009fdc7f3af748ec6139659db80837d769e7a46e1f99b684fd29b";
         indexer = "e2ecb7bcb4c5726ffdcc5885d666eed341ff254f08c270d858ef5a3e91d8ad53";
         dashboard = "c978861c8d160517104030c9f887e3ede7f6e9de4b117b794063bd8a2f7759af";
+        filebeat = "f759a13e5407bba184d9f0235ab88409a0d77d821e64adb3dcc0ba8e397f0201";
       };
       arm64 = {
         agent = "5e9eee2bf8be136317ea14f4d97ce3c595a7be1bc553b4af64563bda28e2fe32";
         manager = "273e086542bd3efc3f35a0d5eb69531341a9d4e387038f90b36ce7b8d3bcaa80";
         indexer = "dbb600d6c1a220928ca843fa56091eadee5798815c34bd5f6be3a41c7ecb061b";
         dashboard = "edf9f837c9f43265421f31c9d21e8129b81ae850ade1e5c74eb126c4d0cefc0e";
+        filebeat = "93860759c538813cfe34f88a4e4047fba45fead287a7d11fea8957c1d816cfd9";
       };
     };
   };
@@ -39,21 +47,29 @@ let
       inherit sha256;
     };
 
+  fetchElasticDeb =
+    {
+      fileName,
+      sha256,
+    }:
+    pkgs.fetchurl {
+      url = "https://artifacts.elastic.co/downloads/beats/filebeat/${fileName}";
+      inherit sha256;
+    };
+
   unpackDeb =
     {
       pname,
       src,
+      packageVersion ? version,
       patchNativeBinaries ? false,
       autoPatchelfIgnoreMissingDeps ? [ ],
       extraBuildInputs ? [ ],
+      postUnpack ? "",
     }:
     pkgs.stdenvNoCC.mkDerivation {
-      inherit
-        pname
-        version
-        src
-        autoPatchelfIgnoreMissingDeps
-        ;
+      inherit pname src autoPatchelfIgnoreMissingDeps;
+      version = packageVersion;
       nativeBuildInputs = [ pkgs.dpkg ] ++ lib.optional patchNativeBinaries pkgs.autoPatchelfHook;
       buildInputs =
         lib.optionals patchNativeBinaries [
@@ -64,9 +80,12 @@ let
           pkgs.zlib
         ]
         ++ extraBuildInputs;
-      unpackPhase = "dpkg-deb -x $src source";
+      unpackPhase = ''
+        dpkg-deb -x "$src" source
+        ${postUnpack}
+      '';
       installPhase = ''
-        chmod -R u+rwX source
+        chmod -R u+rwX,go+rX source
         mkdir -p "$out"
         # Keep the package's /etc and /usr layout intact.  The native modules
         # select which mutable paths are exposed at runtime.
@@ -74,7 +93,7 @@ let
       '';
       dontStrip = true;
       passthru = {
-        inherit version;
+        version = packageVersion;
         sourceArtifact = src;
       };
     };
@@ -148,6 +167,30 @@ let
     patchNativeBinaries = true;
     extraBuildInputs = [ pkgs.stdenv.cc.cc.lib ];
   };
+
+  filebeatModule = pkgs.fetchurl {
+    url = "https://packages.wazuh.com/4.x/filebeat/wazuh-filebeat-${filebeatModuleVersion}.tar.gz";
+    sha256 = componentHashes.common.filebeatModule;
+  };
+
+  filebeatTemplate = pkgs.fetchurl {
+    url = "https://raw.githubusercontent.com/wazuh/wazuh/v${version}/extensions/elasticsearch/7.x/wazuh-template.json";
+    sha256 = componentHashes.common.filebeatTemplate;
+  };
+
+  filebeat = unpackDeb {
+    pname = "wazuh-filebeat";
+    packageVersion = filebeatVersion;
+    src = fetchElasticDeb {
+      fileName = "filebeat-oss-${filebeatVersion}-${debArch}.deb";
+      sha256 = componentHashes.${debArch}.filebeat;
+    };
+    patchNativeBinaries = true;
+    postUnpack = ''
+      tar -xzf ${filebeatModule} -C source/usr/share/filebeat/module
+      install -m 0644 ${filebeatTemplate} source/etc/filebeat/wazuh-template.json
+    '';
+  };
 in
 {
   inherit
@@ -155,5 +198,6 @@ in
     manager
     indexer
     dashboard
+    filebeat
     ;
 }

@@ -7,7 +7,10 @@
 
 let
   cfg = config.services.wazuh;
-  packages = import ./packages.nix { inherit pkgs; };
+  packages = import ./packages.nix {
+    inherit pkgs;
+    version = cfg.version;
+  };
   agentConfig =
     if cfg.agent.config != "" then
       cfg.agent.config
@@ -50,6 +53,11 @@ let
 in
 {
   options.services.wazuh = {
+    version = mkOption {
+      type = types.str;
+      default = "4.14.5";
+      description = "Wazuh version shared by all package defaults.";
+    };
     agent = {
       enable = mkEnableOption "Wazuh agent";
       package = mkOption {
@@ -59,6 +67,7 @@ in
       };
       managerAddress = mkOption {
         type = types.str;
+        default = "127.0.0.1";
         description = "Address of the Wazuh manager.";
       };
       managerPort = mkOption {
@@ -113,6 +122,11 @@ in
         type = types.lines;
         default = "";
         description = "Complete ossec.conf content; the package default is used when empty.";
+      };
+      requireIndexer = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Require the local Wazuh indexer before starting the manager.";
       };
     };
 
@@ -205,6 +219,11 @@ in
         default = "https://127.0.0.1:55000";
         description = "Wazuh manager API URL.";
       };
+      requireManager = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Require the local Wazuh manager before starting the dashboard.";
+      };
       bindAddress = mkOption {
         type = types.str;
         default = "127.0.0.1";
@@ -250,6 +269,38 @@ in
   };
 
   config = lib.mkMerge [
+    {
+      assertions = [
+        {
+          assertion = cfg.version == "4.14.5";
+          message = "Wazuh ${cfg.version} is not packaged by this flake yet.";
+        }
+        {
+          assertion = !cfg.manager.requireIndexer || cfg.indexer.enable;
+          message = "services.wazuh.manager.requireIndexer requires services.wazuh.indexer.enable.";
+        }
+        {
+          assertion = !cfg.indexer.securityBootstrap.enable || cfg.indexer.enable;
+          message = "services.wazuh.indexer.securityBootstrap requires services.wazuh.indexer.enable.";
+        }
+        {
+          assertion = !cfg.dashboard.requireManager || cfg.manager.enable;
+          message = "services.wazuh.dashboard.requireManager requires services.wazuh.manager.enable.";
+        }
+        {
+          assertion =
+            !cfg.indexer.securityBootstrap.enable
+            || (
+              cfg.indexer.certificates.rootCA != null
+              && cfg.indexer.certificates.nodeCertificate != null
+              && cfg.indexer.certificates.nodeKey != null
+              && cfg.indexer.certificates.adminCertificate != null
+              && cfg.indexer.certificates.adminKey != null
+            );
+          message = "Wazuh indexer security bootstrap requires all indexer certificates.";
+        }
+      ];
+    }
     (mkIf cfg.agent.enable {
       users.groups.wazuh = { };
       users.users.wazuh = {
@@ -294,6 +345,8 @@ in
           Restart = "on-failure";
           RestartSec = 5;
           TimeoutStartSec = 120;
+          TimeoutStopSec = 120;
+          KillMode = "control-group";
           ReadWritePaths = [ "/var/ossec" ];
         };
       };
@@ -320,10 +373,14 @@ in
       systemd.services.wazuh-manager = {
         description = "Wazuh manager";
         wantedBy = [ "multi-user.target" ];
+        requires =
+          lib.optional cfg.manager.requireIndexer "wazuh-indexer.service"
+          ++ lib.optional cfg.indexer.securityBootstrap.enable "wazuh-indexer-security.service";
         after = [
           "network-online.target"
-          "wazuh-indexer.service"
-        ];
+        ]
+        ++ lib.optional cfg.manager.requireIndexer "wazuh-indexer.service"
+        ++ lib.optional cfg.indexer.securityBootstrap.enable "wazuh-indexer-security.service";
         wants = [ "network-online.target" ];
         serviceConfig = {
           Type = "forking";
@@ -350,6 +407,8 @@ in
           Restart = "on-failure";
           RestartSec = 5;
           TimeoutStartSec = 120;
+          TimeoutStopSec = 120;
+          KillMode = "control-group";
           ReadWritePaths = [ "/var/ossec" ];
           EnvironmentFile = lib.optional (cfg.manager.environmentFile != null) cfg.manager.environmentFile;
         };
@@ -429,9 +488,25 @@ in
           Group = "wazuh-indexer";
           WorkingDirectory = cfg.indexer.dataDir;
           ExecStart = "${cfg.indexer.package}/usr/share/wazuh-indexer/bin/opensearch";
+          ExecStartPost = pkgs.writeShellScript "wazuh-indexer-healthcheck" ''
+            set -eu
+            for attempt in $(seq 1 60); do
+              status=$(${pkgs.curl}/bin/curl -k -s -o /dev/null -w '%{http_code}' \
+                "https://127.0.0.1:${toString cfg.indexer.port}/" || true)
+              if [ "$status" = 200 ] || [ "$status" = 401 ] || [ "$status" = 403 ]; then
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "Wazuh indexer did not become ready" >&2
+            exit 1
+          '';
           Restart = "on-failure";
           LimitMEMLOCK = "infinity";
           LimitNOFILE = 65535;
+          TimeoutStartSec = 180;
+          TimeoutStopSec = 60;
+          KillMode = "control-group";
           Environment = [
             "OPENSEARCH_PATH_CONF=${cfg.indexer.configDir}"
             "OPENSEARCH_JAVA_HOME=${cfg.indexer.package}/usr/share/wazuh-indexer/jdk"
@@ -517,13 +592,16 @@ in
         requires = [
           "wazuh-dashboard-prepare.service"
           "wazuh-indexer.service"
-        ];
+        ]
+        ++ lib.optional cfg.dashboard.requireManager "wazuh-manager.service"
+        ++ lib.optional cfg.indexer.securityBootstrap.enable "wazuh-indexer-security.service";
         after = [
           "network-online.target"
           "wazuh-dashboard-prepare.service"
           "wazuh-indexer.service"
-          "wazuh-manager.service"
-        ];
+        ]
+        ++ lib.optional cfg.dashboard.requireManager "wazuh-manager.service"
+        ++ lib.optional cfg.indexer.securityBootstrap.enable "wazuh-indexer-security.service";
         wants = [ "network-online.target" ];
         serviceConfig = {
           Type = "simple";
@@ -531,8 +609,29 @@ in
           Group = "wazuh-dashboard";
           WorkingDirectory = cfg.dashboard.dataDir;
           ExecStart = "${cfg.dashboard.package}/usr/share/wazuh-dashboard/bin/opensearch-dashboards";
+          ExecStartPost = pkgs.writeShellScript "wazuh-dashboard-healthcheck" ''
+            set -eu
+            for attempt in $(seq 1 60); do
+              status=$(${pkgs.curl}/bin/curl -k -s -o /dev/null -w '%{http_code}' \
+                "${
+                  if cfg.dashboard.certificates.certificate != null && cfg.dashboard.certificates.key != null then
+                    "https"
+                  else
+                    "http"
+                }://127.0.0.1:${toString cfg.dashboard.port}/api/status" || true)
+              if [ "$status" = 200 ] || [ "$status" = 401 ] || [ "$status" = 403 ]; then
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "Wazuh dashboard did not become ready" >&2
+            exit 1
+          '';
           Restart = "on-failure";
           RestartSec = 5;
+          TimeoutStartSec = 180;
+          TimeoutStopSec = 30;
+          KillMode = "control-group";
           Environment = [
             "OPENSEARCH_DASHBOARDS_PATH_CONF=${cfg.dashboard.configDir}"
             "WAZUH_API_URL=${cfg.dashboard.managerApiUrl}"

@@ -28,6 +28,8 @@ inputs.wazuh-flake.url = "path:/path/to/wazuh-flake";
 imports = [ inputs.wazuh-flake.nixosModules.default ];
 
 services.wazuh = {
+  version = "4.14.5";
+
   agent = {
     enable = true;
     managerAddress = "10.0.0.2";

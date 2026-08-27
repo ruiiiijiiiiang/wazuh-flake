@@ -24,6 +24,10 @@
       nixosModules = {
         default = import ./nix/module.nix;
         wazuh = import ./nix/module.nix;
+        agent = import ./nix/module.nix;
+        manager = import ./nix/module.nix;
+        indexer = import ./nix/module.nix;
+        dashboard = import ./nix/module.nix;
       };
 
       formatter = forAllSystems (system: (import nixpkgs { inherit system; }).nixfmt-rfc-style);

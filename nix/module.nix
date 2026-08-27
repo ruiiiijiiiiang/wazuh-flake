@@ -29,6 +29,7 @@ let
           "@SERVER_PORT@"
           "@INDEXER_URL@"
           "@CONFIG_DIR@"
+          "@DATA_DIR@"
           "@SERVER_SSL_ENABLED@"
         ]
         [
@@ -36,6 +37,7 @@ let
           (toString cfg.dashboard.port)
           cfg.dashboard.indexerUrl
           cfg.dashboard.configDir
+          cfg.dashboard.dataDir
           (
             if cfg.dashboard.certificates.certificate != null && cfg.dashboard.certificates.key != null then
               "true"
@@ -44,6 +46,15 @@ let
           )
         ]
         (lib.readFile ./opensearch_dashboards.yml);
+  indexerHealthHost =
+    if cfg.indexer.bindAddress == "0.0.0.0" then
+      "127.0.0.1"
+    else if cfg.indexer.bindAddress == "::" then
+      "[::1]"
+    else if lib.hasInfix ":" cfg.indexer.bindAddress then
+      "[${cfg.indexer.bindAddress}]"
+    else
+      cfg.indexer.bindAddress;
   inherit (lib)
     mkEnableOption
     mkIf
@@ -123,6 +134,18 @@ in
         default = "";
         description = "Complete ossec.conf content; the package default is used when empty.";
       };
+      certificates = {
+        certificate = mkOption {
+          type = types.nullOr types.path;
+          default = null;
+          description = "Optional Wazuh enrollment server certificate.";
+        };
+        key = mkOption {
+          type = types.nullOr types.path;
+          default = null;
+          description = "Optional Wazuh enrollment server private key.";
+        };
+      };
       requireIndexer = mkOption {
         type = types.bool;
         default = true;
@@ -182,6 +205,16 @@ in
         type = types.port;
         default = 9200;
         description = "Wazuh indexer HTTPS port.";
+      };
+      bindAddress = mkOption {
+        type = types.str;
+        default = "127.0.0.1";
+        description = "Wazuh indexer listen address.";
+      };
+      openFirewall = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Open the Wazuh indexer port in the firewall.";
       };
       securityBootstrap = {
         enable = mkEnableOption "Wazuh indexer security bootstrap";
@@ -276,16 +309,30 @@ in
           message = "Wazuh ${cfg.version} is not packaged by this flake yet.";
         }
         {
-          assertion = !cfg.manager.requireIndexer || cfg.indexer.enable;
+          assertion = !(cfg.agent.enable && cfg.manager.enable);
+          message = "The Wazuh agent and manager cannot share the same /var/ossec runtime.";
+        }
+        {
+          assertion = !cfg.manager.enable || !cfg.manager.requireIndexer || cfg.indexer.enable;
           message = "services.wazuh.manager.requireIndexer requires services.wazuh.indexer.enable.";
+        }
+        {
+          assertion =
+            !cfg.manager.enable
+            || (cfg.manager.certificates.certificate == null) == (cfg.manager.certificates.key == null);
+          message = "Wazuh manager enrollment certificate and key must be configured together.";
         }
         {
           assertion = !cfg.indexer.securityBootstrap.enable || cfg.indexer.enable;
           message = "services.wazuh.indexer.securityBootstrap requires services.wazuh.indexer.enable.";
         }
         {
-          assertion = !cfg.dashboard.requireManager || cfg.manager.enable;
+          assertion = !cfg.dashboard.enable || !cfg.dashboard.requireManager || cfg.manager.enable;
           message = "services.wazuh.dashboard.requireManager requires services.wazuh.manager.enable.";
+        }
+        {
+          assertion = !cfg.dashboard.enable || cfg.indexer.enable;
+          message = "services.wazuh.dashboard requires services.wazuh.indexer.enable.";
         }
         {
           assertion =
@@ -314,6 +361,7 @@ in
         "d /var/ossec/etc 0750 root wazuh -"
         "d /var/ossec/logs 0750 wazuh wazuh -"
         "d /var/ossec/queue 0750 wazuh wazuh -"
+        "d /var/ossec/queue/sockets 0770 wazuh wazuh -"
         "d /var/ossec/var 0750 wazuh wazuh -"
       ];
       environment.etc."wazuh/ossec.conf".text = agentConfig;
@@ -322,22 +370,32 @@ in
         wantedBy = [ "multi-user.target" ];
         after = [ "network-online.target" ];
         wants = [ "network-online.target" ];
+        path = [
+          pkgs.coreutils
+          pkgs.gawk
+          pkgs.procps
+        ];
         serviceConfig = {
           Type = "forking";
           ExecStartPre = pkgs.writeShellScript "wazuh-agent-prepare" ''
             set -eu
             install -d -m 0750 -o root -g wazuh /var/ossec /var/ossec/etc
-            if [ -f /var/ossec/etc/client.keys ]; then
-              install -m 0640 /var/ossec/etc/client.keys /tmp/wazuh-client.keys
-            fi
-            cp -a --no-preserve=ownership ${cfg.agent.package}/var/ossec/. /var/ossec/
-            if [ -f /tmp/wazuh-client.keys ]; then
-              install -o wazuh -g wazuh -m 0640 /tmp/wazuh-client.keys /var/ossec/etc/client.keys
-              rm -f /tmp/wazuh-client.keys
+            package_marker=/var/ossec/.wazuh-agent-package
+            if [ ! -f "$package_marker" ] || [ "$(cat "$package_marker")" != "${cfg.agent.package}" ]; then
+              if [ -f /var/ossec/etc/client.keys ]; then
+                install -m 0640 /var/ossec/etc/client.keys /run/wazuh-agent-client.keys
+              fi
+              cp -a --no-preserve=ownership ${cfg.agent.package}/var/ossec/. /var/ossec/
+              ${cfg.agent.package}/var/ossec/packages_files/agent_installation_scripts/restore-permissions.sh
+              if [ -f /run/wazuh-agent-client.keys ]; then
+                install -o wazuh -g wazuh -m 0640 /run/wazuh-agent-client.keys /var/ossec/etc/client.keys
+                rm -f /run/wazuh-agent-client.keys
+              fi
             fi
             install -o root -g wazuh -m 0640 /etc/wazuh/ossec.conf /var/ossec/etc/ossec.conf
-            chown -R root:wazuh /var/ossec
-            chown -R wazuh:wazuh /var/ossec/logs /var/ossec/queue /var/ossec/var
+            printf '%s\n' "${cfg.agent.package}" > "$package_marker"
+            chown root:wazuh "$package_marker"
+            chmod 0640 "$package_marker"
           '';
           ExecStart = "/var/ossec/bin/wazuh-control start";
           ExecStop = "/var/ossec/bin/wazuh-control stop";
@@ -350,10 +408,6 @@ in
           ReadWritePaths = [ "/var/ossec" ];
         };
       };
-      networking.firewall.allowedTCPPorts = [
-        cfg.agent.managerPort
-        cfg.agent.enrollmentPort
-      ];
     })
 
     (mkIf cfg.manager.enable {
@@ -368,6 +422,7 @@ in
         "d /var/ossec/etc 0750 root wazuh -"
         "d /var/ossec/logs 0750 wazuh wazuh -"
         "d /var/ossec/queue 0750 wazuh wazuh -"
+        "d /var/ossec/queue/sockets 0770 wazuh wazuh -"
         "d /var/ossec/var 0750 wazuh wazuh -"
       ];
       systemd.services.wazuh-manager = {
@@ -382,31 +437,77 @@ in
         ++ lib.optional cfg.manager.requireIndexer "wazuh-indexer.service"
         ++ lib.optional cfg.indexer.securityBootstrap.enable "wazuh-indexer-security.service";
         wants = [ "network-online.target" ];
+        path = [
+          pkgs.coreutils
+          pkgs.gawk
+          pkgs.procps
+        ];
         serviceConfig = {
           Type = "forking";
           ExecStartPre = pkgs.writeShellScript "wazuh-manager-prepare" ''
             set -eu
             install -d -m 0750 -o root -g wazuh /var/ossec /var/ossec/etc
-            if [ -f /var/ossec/etc/client.keys ]; then
-              install -m 0640 /var/ossec/etc/client.keys /tmp/wazuh-manager-client.keys
-            fi
-            cp -a --no-preserve=ownership ${cfg.manager.package}/var/ossec/. /var/ossec/
-            if [ -f /tmp/wazuh-manager-client.keys ]; then
-              install -o wazuh -g wazuh -m 0640 /tmp/wazuh-manager-client.keys /var/ossec/etc/client.keys
-              rm -f /tmp/wazuh-manager-client.keys
+            package_marker=/var/ossec/.wazuh-manager-package
+            if [ ! -f "$package_marker" ] || [ "$(cat "$package_marker")" != "${cfg.manager.package}" ]; then
+              if [ -f /var/ossec/etc/client.keys ]; then
+                install -m 0640 /var/ossec/etc/client.keys /run/wazuh-manager-client.keys
+              fi
+              ${pkgs.rsync}/bin/rsync -a --no-owner --no-group \
+                --exclude='/framework/python' \
+                --exclude='/tmp/vd_*_vd_*.tar*' \
+                ${cfg.manager.package}/var/ossec/ /var/ossec/
+
+              install -d -m 0750 -o root -g wazuh /var/ossec/framework
+              if [ ! -L /var/ossec/framework/python ]; then
+                rm -rf /var/ossec/framework/python
+              fi
+              ln -sfnT ${cfg.manager.package}/var/ossec/framework/python /var/ossec/framework/python
+
+              install -d -m 1770 -o root -g wazuh /var/ossec/tmp
+              for vulnerability_database in ${cfg.manager.package}/var/ossec/tmp/vd_*_vd_*.tar*; do
+                if [ -f "$vulnerability_database" ]; then
+                  ln -sfnT "$vulnerability_database" "/var/ossec/tmp/$(basename "$vulnerability_database")"
+                fi
+              done
+
+              ${pkgs.gnused}/bin/sed \
+                -e '\|/var/ossec/framework/python|d' \
+                -e '\|/var/ossec/tmp/vd_.*_vd_.*\.tar|d' \
+                ${cfg.manager.package}/var/ossec/packages_files/manager_installation_scripts/restore-permissions.sh \
+                | ${pkgs.bash}/bin/bash
+              if [ -f /run/wazuh-manager-client.keys ]; then
+                install -o wazuh -g wazuh -m 0640 /run/wazuh-manager-client.keys /var/ossec/etc/client.keys
+                rm -f /run/wazuh-manager-client.keys
+              fi
             fi
             ${lib.optionalString (cfg.manager.config != "") ''
               install -o root -g wazuh -m 0640 /etc/wazuh/manager.conf /var/ossec/etc/ossec.conf
             ''}
-            chown -R root:wazuh /var/ossec
-            chown -R wazuh:wazuh /var/ossec/logs /var/ossec/queue /var/ossec/var
+            ${lib.optionalString (cfg.manager.certificates.certificate != null) ''
+              install -o root -g wazuh -m 0640 ${cfg.manager.certificates.certificate} /var/ossec/etc/sslmanager.cert
+              install -o root -g wazuh -m 0640 ${cfg.manager.certificates.key} /var/ossec/etc/sslmanager.key
+            ''}
+            if [ ! -f /var/ossec/etc/sslmanager.cert ] || [ ! -f /var/ossec/etc/sslmanager.key ]; then
+              rm -f /var/ossec/etc/sslmanager.cert /var/ossec/etc/sslmanager.key
+              /var/ossec/bin/wazuh-authd \
+                -C 365 \
+                -B 2048 \
+                -K /var/ossec/etc/sslmanager.key \
+                -X /var/ossec/etc/sslmanager.cert \
+                -S "/C=US/ST=California/CN=wazuh/"
+              chown root:wazuh /var/ossec/etc/sslmanager.cert /var/ossec/etc/sslmanager.key
+              chmod 0640 /var/ossec/etc/sslmanager.cert /var/ossec/etc/sslmanager.key
+            fi
+            printf '%s\n' "${cfg.manager.package}" > "$package_marker"
+            chown root:wazuh "$package_marker"
+            chmod 0640 "$package_marker"
           '';
           ExecStart = "/var/ossec/bin/wazuh-control start";
           ExecStop = "/var/ossec/bin/wazuh-control stop";
           ExecReload = "/var/ossec/bin/wazuh-control restart";
           Restart = "on-failure";
           RestartSec = 5;
-          TimeoutStartSec = 120;
+          TimeoutStartSec = 300;
           TimeoutStopSec = 120;
           KillMode = "control-group";
           ReadWritePaths = [ "/var/ossec" ];
@@ -431,6 +532,7 @@ in
       boot.kernel.sysctl."vm.max_map_count" = 262144;
       systemd.tmpfiles.rules = [
         "d ${cfg.indexer.dataDir} 0750 wazuh-indexer wazuh-indexer -"
+        "d /var/log/wazuh-indexer 0750 wazuh-indexer wazuh-indexer -"
         "d ${cfg.indexer.configDir} 0750 root wazuh-indexer -"
         "d ${cfg.indexer.configDir}/certs 0500 wazuh-indexer wazuh-indexer -"
       ];
@@ -487,12 +589,12 @@ in
           User = "wazuh-indexer";
           Group = "wazuh-indexer";
           WorkingDirectory = cfg.indexer.dataDir;
-          ExecStart = "${cfg.indexer.package}/usr/share/wazuh-indexer/bin/opensearch";
+          ExecStart = "${cfg.indexer.package}/usr/share/wazuh-indexer/bin/opensearch -Enetwork.host=${cfg.indexer.bindAddress} -Ehttp.port=${toString cfg.indexer.port} -Epath.data=${cfg.indexer.dataDir} -Epath.logs=/var/log/wazuh-indexer";
           ExecStartPost = pkgs.writeShellScript "wazuh-indexer-healthcheck" ''
             set -eu
             for attempt in $(seq 1 60); do
               status=$(${pkgs.curl}/bin/curl -k -s -o /dev/null -w '%{http_code}' \
-                "https://127.0.0.1:${toString cfg.indexer.port}/" || true)
+                "https://${indexerHealthHost}:${toString cfg.indexer.port}/" || true)
               if [ "$status" = 200 ] || [ "$status" = 401 ] || [ "$status" = 403 ]; then
                 exit 0
               fi
@@ -540,7 +642,7 @@ in
           '';
         };
       };
-      networking.firewall.allowedTCPPorts = [ cfg.indexer.port ];
+      networking.firewall.allowedTCPPorts = lib.optional cfg.indexer.openFirewall cfg.indexer.port;
     })
 
     (mkIf cfg.dashboard.enable {

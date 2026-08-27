@@ -4,22 +4,17 @@
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
   outputs =
-    inputs@{ self, nixpkgs }:
+    { nixpkgs, ... }:
     let
       systems = [
         "x86_64-linux"
         "aarch64-linux"
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
+      packagesFor = system: import ./nix/packages.nix { pkgs = import nixpkgs { inherit system; }; };
     in
     {
-      packages = forAllSystems (
-        system:
-        let
-          pkgs = import nixpkgs { inherit system; };
-        in
-        import ./nix/packages.nix { inherit pkgs; }
-      );
+      packages = forAllSystems packagesFor;
 
       nixosModules = {
         default = import ./nix/module.nix;
@@ -30,6 +25,17 @@
         dashboard = import ./nix/module.nix;
       };
 
-      formatter = forAllSystems (system: (import nixpkgs { inherit system; }).nixfmt-rfc-style);
+      checks = forAllSystems (
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+        in
+        packagesFor system
+        // {
+          module-evaluation = import ./tests/module-evaluation.nix { inherit pkgs; };
+        }
+      );
+
+      formatter = forAllSystems (system: (import nixpkgs { inherit system; }).nixfmt);
     };
 }

@@ -44,18 +44,29 @@ let
       pname,
       src,
       patchNativeBinaries ? false,
+      autoPatchelfIgnoreMissingDeps ? [ ],
+      extraBuildInputs ? [ ],
     }:
     pkgs.stdenvNoCC.mkDerivation {
-      inherit pname version src;
+      inherit
+        pname
+        version
+        src
+        autoPatchelfIgnoreMissingDeps
+        ;
       nativeBuildInputs = [ pkgs.dpkg ] ++ lib.optional patchNativeBinaries pkgs.autoPatchelfHook;
-      buildInputs = lib.optionals patchNativeBinaries [
-        pkgs.glibc
-        pkgs.libgcc
-        pkgs.openssl
-        pkgs.zlib
-      ];
+      buildInputs =
+        lib.optionals patchNativeBinaries [
+          pkgs.glibc
+          pkgs.elfutils.out
+          pkgs.libgcc
+          pkgs.openssl
+          pkgs.zlib
+        ]
+        ++ extraBuildInputs;
       unpackPhase = "dpkg-deb -x $src source";
       installPhase = ''
+        chmod -R u+rwX source
         mkdir -p "$out"
         # Keep the package's /etc and /usr layout intact.  The native modules
         # select which mutable paths are exposed at runtime.
@@ -86,6 +97,25 @@ let
       sha256 = componentHashes.${debArch}.manager;
     };
     patchNativeBinaries = true;
+    # These belong to optional modules in Wazuh's bundled Python runtime. The
+    # manager daemons and API do not require them, and several target obsolete
+    # Debian SONAMEs that are intentionally absent from current nixpkgs.
+    autoPatchelfIgnoreMissingDeps = [
+      "libX11.so.6"
+      "libcrypt.so.1"
+      "libgdbm.so.4"
+      "libgdbm_compat.so.4"
+      "libncursesw.so.5"
+      "libnsl.so.2"
+      "libpanelw.so.5"
+      "libreadline.so.6"
+      "libtcl8.5.so"
+      "libtinfo.so.5"
+      "libtirpc.so.1"
+      "libtirpc.so.3"
+      "libtk8.5.so"
+      "libuuid.so.1"
+    ];
   };
 
   indexer = unpackDeb {
@@ -95,6 +125,17 @@ let
       fileName = "wazuh-indexer_${version}-1_${debArch}.deb";
       sha256 = componentHashes.${debArch}.indexer;
     };
+    patchNativeBinaries = true;
+    # OpenSearch runs headless; these libraries are referenced only by the
+    # bundled JDK's desktop, splash-screen, and Java Sound modules.
+    autoPatchelfIgnoreMissingDeps = [
+      "libX11.so.6"
+      "libXext.so.6"
+      "libXi.so.6"
+      "libXrender.so.1"
+      "libXtst.so.6"
+      "libasound.so.2"
+    ];
   };
 
   dashboard = unpackDeb {
@@ -104,6 +145,8 @@ let
       fileName = "wazuh-dashboard_${version}-1_${debArch}.deb";
       sha256 = componentHashes.${debArch}.dashboard;
     };
+    patchNativeBinaries = true;
+    extraBuildInputs = [ pkgs.stdenv.cc.cc.lib ];
   };
 in
 {

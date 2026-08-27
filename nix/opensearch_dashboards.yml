@@ -1,0 +1,7 @@
+server.host: "@SERVER_HOST@"
+server.port: @SERVER_PORT@
+server.ssl.enabled: @SERVER_SSL_ENABLED@
+server.ssl.certificate: "@CONFIG_DIR@/certs/dashboard.pem"
+server.ssl.key: "@CONFIG_DIR@/certs/dashboard-key.pem"
+opensearch.hosts: ["@INDEXER_URL@"]
+opensearch.ssl.certificateAuthorities: ["@CONFIG_DIR@/certs/root-ca.pem"]

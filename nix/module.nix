@@ -8,6 +8,14 @@
 let
   cfg = config.services.wazuh;
   packages = import ./packages.nix { inherit pkgs; };
+  agentConfig =
+    if cfg.agent.config != "" then
+      cfg.agent.config
+    else
+      lib.replaceStrings
+        [ "@MANAGER_ADDRESS@" "@MANAGER_PORT@" "@ENROLLMENT_PORT@" ]
+        [ cfg.agent.managerAddress (toString cfg.agent.managerPort) (toString cfg.agent.enrollmentPort) ]
+        (lib.readFile ./ossec.conf);
   inherit (lib)
     mkEnableOption
     mkIf
@@ -28,10 +36,20 @@ in
         type = types.str;
         description = "Address of the Wazuh manager.";
       };
+      managerPort = mkOption {
+        type = types.port;
+        default = 1514;
+        description = "Wazuh manager event-collection port.";
+      };
+      enrollmentPort = mkOption {
+        type = types.port;
+        default = 1515;
+        description = "Wazuh manager enrollment port.";
+      };
       config = mkOption {
         type = types.lines;
         default = "";
-        description = "Additional complete ossec.conf content supplied by the caller.";
+        description = "Complete ossec.conf content; an enrollment config is generated when empty.";
       };
     };
 
@@ -87,9 +105,16 @@ in
         isSystemUser = true;
         group = "wazuh";
         home = "/var/ossec";
+        shell = "${pkgs.shadow}/bin/nologin";
       };
-      systemd.tmpfiles.rules = [ "d /var/ossec 0750 wazuh wazuh -" ];
-      environment.etc."wazuh/ossec.conf".text = cfg.agent.config;
+      systemd.tmpfiles.rules = [
+        "d /var/ossec 0750 root wazuh -"
+        "d /var/ossec/etc 0750 root wazuh -"
+        "d /var/ossec/logs 0750 wazuh wazuh -"
+        "d /var/ossec/queue 0750 wazuh wazuh -"
+        "d /var/ossec/var 0750 wazuh wazuh -"
+      ];
+      environment.etc."wazuh/ossec.conf".text = agentConfig;
       systemd.services.wazuh-agent = {
         description = "Wazuh agent";
         wantedBy = [ "multi-user.target" ];
@@ -97,14 +122,34 @@ in
         wants = [ "network-online.target" ];
         serviceConfig = {
           Type = "forking";
-          ExecStart = "${cfg.agent.package}/var/ossec/bin/wazuh-control start";
-          ExecStop = "${cfg.agent.package}/var/ossec/bin/wazuh-control stop";
-          ExecReload = "${cfg.agent.package}/var/ossec/bin/wazuh-control restart";
+          ExecStartPre = pkgs.writeShellScript "wazuh-agent-prepare" ''
+            set -eu
+            install -d -m 0750 -o root -g wazuh /var/ossec /var/ossec/etc
+            if [ -f /var/ossec/etc/client.keys ]; then
+              install -m 0640 /var/ossec/etc/client.keys /tmp/wazuh-client.keys
+            fi
+            cp -a --no-preserve=ownership ${cfg.agent.package}/var/ossec/. /var/ossec/
+            if [ -f /tmp/wazuh-client.keys ]; then
+              install -o wazuh -g wazuh -m 0640 /tmp/wazuh-client.keys /var/ossec/etc/client.keys
+              rm -f /tmp/wazuh-client.keys
+            fi
+            install -o root -g wazuh -m 0640 /etc/wazuh/ossec.conf /var/ossec/etc/ossec.conf
+            chown -R root:wazuh /var/ossec
+            chown -R wazuh:wazuh /var/ossec/logs /var/ossec/queue /var/ossec/var
+          '';
+          ExecStart = "/var/ossec/bin/wazuh-control start";
+          ExecStop = "/var/ossec/bin/wazuh-control stop";
+          ExecReload = "/var/ossec/bin/wazuh-control restart";
           Restart = "on-failure";
-          StateDirectory = "ossec";
+          RestartSec = 5;
+          TimeoutStartSec = 120;
           ReadWritePaths = [ "/var/ossec" ];
         };
       };
+      networking.firewall.allowedTCPPorts = [
+        cfg.agent.managerPort
+        cfg.agent.enrollmentPort
+      ];
     })
 
     (mkIf cfg.manager.enable {

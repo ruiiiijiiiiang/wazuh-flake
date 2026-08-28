@@ -1,55 +1,13 @@
 { pkgs }:
 
 let
-  certificates =
-    pkgs.runCommand "wazuh-central-test-certificates" { nativeBuildInputs = [ pkgs.openssl ]; }
-      ''
-        set -eu
-        mkdir -p "$out"
-
-        openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 2 \
-          -subj "/C=US/L=California/O=Wazuh/OU=Wazuh/CN=Wazuh root CA" \
-          -keyout "$out/root-ca-key.pem" \
-          -out "$out/root-ca.pem"
-
-        make_certificate() {
-          name="$1"
-          common_name="$2"
-          subject_alt_name="$3"
-          extended_key_usage="$4"
-          openssl req -newkey rsa:2048 -nodes -sha256 \
-            -subj "/C=US/L=California/O=Wazuh/OU=Wazuh/CN=$common_name" \
-            -keyout "$out/$name-key.pem" \
-            -out "$out/$name.csr"
-          {
-            if [ -n "$subject_alt_name" ]; then
-              printf 'subjectAltName=%s\n' "$subject_alt_name"
-            fi
-            printf 'extendedKeyUsage=%s\n' "$extended_key_usage"
-          } > "$out/$name.ext"
-          openssl x509 -req -sha256 -days 2 \
-            -in "$out/$name.csr" \
-            -CA "$out/root-ca.pem" \
-            -CAkey "$out/root-ca-key.pem" \
-            -CAcreateserial \
-            -extfile "$out/$name.ext" \
-            -out "$out/$name.pem"
-          rm "$out/$name.csr" "$out/$name.ext"
-        }
-
-        make_certificate node-1 node-1 \
-          "IP:127.0.0.1,DNS:localhost,DNS:node-1" "serverAuth,clientAuth"
-        make_certificate admin admin "" "clientAuth"
-        make_certificate filebeat wazuh-server "" "clientAuth"
-        make_certificate dashboard wazuh-dashboard \
-          "IP:127.0.0.1,DNS:localhost,DNS:wazuh-dashboard" "serverAuth"
-      '';
+  certificates = import ./certificates.nix { inherit pkgs; };
 
   credentials = pkgs.writeText "wazuh-central-test-credentials" ''
     INDEXER_USERNAME=admin
-    INDEXER_PASSWORD=admin
+    INDEXER_PASSWORD=native-indexer-test
     DASHBOARD_USERNAME=kibanaserver
-    DASHBOARD_PASSWORD=kibanaserver
+    DASHBOARD_PASSWORD=native-dashboard-test
     API_USERNAME=wazuh-wui
     API_PASSWORD=wazuh-wui
   '';
@@ -94,7 +52,10 @@ pkgs.testers.nixosTest {
             adminCertificate = "${certificates}/admin.pem";
             adminKey = "${certificates}/admin-key.pem";
           };
-          securityBootstrap.enable = true;
+          securityBootstrap = {
+            enable = true;
+            environmentFile = credentials;
+          };
         };
 
         dashboard = {
@@ -123,7 +84,7 @@ pkgs.testers.nixosTest {
     central.wait_for_unit("wazuh-manager.service", timeout=service_timeout)
     central.wait_for_unit("wazuh-filebeat.service", timeout=service_timeout)
     central.succeed(
-        "curl --fail --silent --cacert ${certificates}/root-ca.pem --user admin:admin "
+        "curl --fail --silent --cacert ${certificates}/root-ca.pem --user admin:native-indexer-test "
         "'https://127.0.0.1:9200/_cluster/health?wait_for_status=green&"
         "wait_for_no_relocating_shards=true&wait_for_no_initializing_shards=true&timeout=180s'"
     )
@@ -132,7 +93,7 @@ pkgs.testers.nixosTest {
 
     central.succeed(
         "curl --fail --silent --cacert ${certificates}/root-ca.pem "
-        "--user admin:admin https://127.0.0.1:9200/_cluster/health"
+        "--user admin:native-indexer-test https://127.0.0.1:9200/_cluster/health"
     )
     central.succeed(
         "curl --fail --silent --insecure --user wazuh-wui:wazuh-wui "
@@ -148,7 +109,7 @@ pkgs.testers.nixosTest {
         "/var/lib/wazuh-dashboard/wazuh/config/wazuh.yml"
     )
     central.wait_until_succeeds(
-        "curl --fail --silent --insecure --user admin:admin "
+        "curl --fail --silent --insecure --user admin:native-indexer-test "
         "https://127.0.0.1:5601/api/status >/dev/null",
         timeout=poll_timeout,
     )
@@ -159,7 +120,7 @@ pkgs.testers.nixosTest {
         ">> /var/ossec/logs/alerts/alerts.json"
     )
     central.wait_until_succeeds(
-        "curl --fail --silent --cacert ${certificates}/root-ca.pem --user admin:admin "
+        "curl --fail --silent --cacert ${certificates}/root-ca.pem --user admin:native-indexer-test "
         "'https://127.0.0.1:9200/_cat/indices/wazuh-alerts-4.x-*?h=index' | grep -q wazuh-alerts-4.x-",
         timeout=poll_timeout,
     )

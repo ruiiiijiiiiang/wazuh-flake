@@ -34,6 +34,7 @@
         packagesFor system
         // {
           module-evaluation = import ./tests/module-evaluation.nix { inherit pkgs; };
+          security-bootstrap = import ./tests/security-bootstrap.nix { inherit pkgs; };
           central-stack = import ./tests/central-stack.nix { inherit pkgs; };
         }
       );

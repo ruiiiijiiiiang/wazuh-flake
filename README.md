@@ -95,7 +95,10 @@ in
         adminCertificate = "/run/agenix/wazuh-admin-cert";
         adminKey = "/run/agenix/wazuh-admin-key";
       };
-      securityBootstrap.enable = true;
+      securityBootstrap = {
+        enable = true;
+        environmentFile = credentials;
+      };
     };
 
     dashboard = {
@@ -122,11 +125,17 @@ API_USERNAME=wazuh-wui
 API_PASSWORD=replace-me
 ```
 
-The indexer security configuration must contain matching users and password
-hashes. On a fresh installation, `securityBootstrap.enable` loads the security
-configuration bundled by the official Wazuh package once and writes its marker
-under `/var/lib/wazuh-indexer`. Supply credentials that match that configuration
-or preserve your existing indexer state and security index.
+On a fresh installation, the security bootstrap hashes `INDEXER_PASSWORD` and
+`DASHBOARD_PASSWORD` at runtime and replaces the bundled passwords for the
+reserved `admin` and `kibanaserver` users before loading the security
+configuration. Plaintext passwords are not written to the Nix store. The
+bootstrap waits for both accounts to authenticate before writing its marker
+under `/var/lib/wazuh-indexer`.
+
+If a security index already exists but the local marker is missing, bootstrap
+fails instead of overwriting it. Set
+`services.wazuh.indexer.securityBootstrap.adoptExisting = true` for one
+activation to verify and adopt that index without changing its contents.
 
 The agent and manager cannot be enabled on the same host because both use
 `/var/ossec`. Manager enrollment uses a locally generated one-year self-signed

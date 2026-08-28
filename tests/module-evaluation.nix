@@ -25,6 +25,7 @@ pkgs.testers.nixosTest {
         services.wazuh.manager = {
           enable = true;
           requireIndexer = false;
+          config = builtins.readFile ./manager-standalone-ossec.conf;
         };
       };
   };

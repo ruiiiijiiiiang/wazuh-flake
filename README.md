@@ -9,9 +9,13 @@ projects from source.
 
 ## Status
 
-The package URLs and hashes are pinned to Wazuh 4.14.5 for x86_64-linux and
+The package URLs and hashes are pinned to Wazuh 4.14.7 for x86_64-linux and
 aarch64-linux. All central components are kept at the same patch version, and
 the release hashes are centralized near the top of `nix/packages.nix`.
+Wazuh 4.14.7 includes the
+[vulnerability-scanner shutdown fix](https://github.com/wazuh/wazuh/pull/36011)
+first released in 4.14.6; 4.14.5 is not supported by this flake because its
+manager can crash while stopping a disabled or partially initialized scanner.
 
 The Debian maintainer scripts are intentionally not executed. The modules
 reproduce the required setup, including permissions and the manager enrollment
@@ -20,6 +24,12 @@ certificate, while preserving Wazuh's expected runtime paths under
 remain store-backed instead of being copied on every service restart.
 
 The x86_64 NixOS VM tests cover agent and manager first boot and restart. A
+focused manager test verifies that credentials are written to the Wazuh
+keystore without being inherited by the long-running manager processes. A
+manager lifecycle regression test performs five consecutive restarts and fails
+on any `wazuh-modulesd` kernel segfault or coredump. Manager-only tests use a
+standalone XML profile that disables vulnerability indexing; the complete-stack
+test exercises the indexer-backed configuration. A
 separate end-to-end test boots the complete TLS-enabled central stack,
 initializes OpenSearch security, authenticates with the manager API, starts the
 dashboard, forwards an alert through Filebeat, verifies the resulting index,
@@ -125,6 +135,12 @@ API_USERNAME=wazuh-wui
 API_PASSWORD=replace-me
 ```
 
+The manager environment file is read only by its short-lived preparation unit.
+That unit writes the indexer username and password to Wazuh's keystore, then
+exits before the manager starts, so the manager daemons do not inherit the
+plaintext variables. Restart `wazuh-manager.service` after rotating the file;
+the preparation unit runs again on every manager start.
+
 On a fresh installation, the security bootstrap hashes `INDEXER_PASSWORD` and
 `DASHBOARD_PASSWORD` at runtime and replaces the bundled passwords for the
 reserved `admin` and `kibanaserver` users before loading the security
@@ -157,5 +173,7 @@ Agents should not be newer than their manager.
 ```console
 nix flake check
 nix flake check --all-systems --no-build
+nix build .#checks.x86_64-linux.manager-secret-isolation
+nix build .#checks.x86_64-linux.manager-restart-stress
 nix build .#checks.x86_64-linux.central-stack
 ```

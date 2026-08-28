@@ -10,13 +10,13 @@ in
 {
   options.services.wazuh.version = lib.mkOption {
     type = lib.types.str;
-    default = "4.14.5";
+    default = "4.14.7";
     description = "Wazuh version shared by all package defaults.";
   };
 
   config.assertions = [
     {
-      assertion = cfg.version == "4.14.5";
+      assertion = cfg.version == "4.14.7";
       message = "Wazuh ${cfg.version} is not packaged by this flake yet.";
     }
   ];

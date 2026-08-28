@@ -34,6 +34,8 @@
         packagesFor system
         // {
           module-evaluation = import ./tests/module-evaluation.nix { inherit pkgs; };
+          manager-restart-stress = import ./tests/manager-restart-stress.nix { inherit pkgs; };
+          manager-secret-isolation = import ./tests/manager-secret-isolation.nix { inherit pkgs; };
           security-bootstrap = import ./tests/security-bootstrap.nix { inherit pkgs; };
           central-stack = import ./tests/central-stack.nix { inherit pkgs; };
         }

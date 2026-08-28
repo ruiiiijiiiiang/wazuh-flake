@@ -101,28 +101,19 @@ in
         "d /var/ossec/queue/sockets 0770 wazuh wazuh -"
         "d /var/ossec/var 0750 wazuh wazuh -"
       ];
-      systemd.services.wazuh-manager = {
-        description = "Wazuh manager";
-        wantedBy = [ "multi-user.target" ];
-        requires =
-          lib.optional cfg.requireIndexer "wazuh-indexer.service"
-          ++ lib.optional wazuhCfg.indexer.securityBootstrap.enable "wazuh-indexer-security.service"
-          ++ lib.optional wazuhCfg.filebeat.enable "wazuh-filebeat-prepare.service";
-        after = [
-          "network-online.target"
-        ]
-        ++ lib.optional cfg.requireIndexer "wazuh-indexer.service"
-        ++ lib.optional wazuhCfg.indexer.securityBootstrap.enable "wazuh-indexer-security.service"
-        ++ lib.optional wazuhCfg.filebeat.enable "wazuh-filebeat-prepare.service";
-        wants = [ "network-online.target" ];
+      systemd.services.wazuh-manager-prepare = {
+        description = "Prepare Wazuh manager runtime files and credentials";
+        before = [ "wazuh-manager.service" ];
         path = [
           pkgs.coreutils
           pkgs.gawk
           pkgs.procps
         ];
         serviceConfig = {
-          Type = "forking";
-          ExecStartPre = pkgs.writeShellScript "wazuh-manager-prepare" ''
+          Type = "oneshot";
+          EnvironmentFile = lib.optional (cfg.environmentFile != null) cfg.environmentFile;
+          UMask = "0077";
+          ExecStart = pkgs.writeShellScript "wazuh-manager-prepare" ''
             set -eu
             install -d -m 0750 -o root -g wazuh /var/ossec /var/ossec/etc
             package_marker=/var/ossec/.wazuh-manager-package
@@ -191,6 +182,32 @@ in
             chown root:wazuh "$package_marker"
             chmod 0640 "$package_marker"
           '';
+        };
+      };
+      systemd.services.wazuh-manager = {
+        description = "Wazuh manager";
+        wantedBy = [ "multi-user.target" ];
+        requires = [
+          "wazuh-manager-prepare.service"
+        ]
+        ++ lib.optional cfg.requireIndexer "wazuh-indexer.service"
+        ++ lib.optional wazuhCfg.indexer.securityBootstrap.enable "wazuh-indexer-security.service"
+        ++ lib.optional wazuhCfg.filebeat.enable "wazuh-filebeat-prepare.service";
+        after = [
+          "network-online.target"
+          "wazuh-manager-prepare.service"
+        ]
+        ++ lib.optional cfg.requireIndexer "wazuh-indexer.service"
+        ++ lib.optional wazuhCfg.indexer.securityBootstrap.enable "wazuh-indexer-security.service"
+        ++ lib.optional wazuhCfg.filebeat.enable "wazuh-filebeat-prepare.service";
+        wants = [ "network-online.target" ];
+        path = [
+          pkgs.coreutils
+          pkgs.gawk
+          pkgs.procps
+        ];
+        serviceConfig = {
+          Type = "forking";
           ExecStart = "/var/ossec/bin/wazuh-control start";
           ExecStop = "/var/ossec/bin/wazuh-control stop";
           ExecReload = "/var/ossec/bin/wazuh-control restart";
@@ -200,7 +217,6 @@ in
           TimeoutStopSec = 120;
           KillMode = "control-group";
           ReadWritePaths = [ "/var/ossec" ];
-          EnvironmentFile = lib.optional (cfg.environmentFile != null) cfg.environmentFile;
         };
       };
       environment.etc."wazuh/manager.conf".text = cfg.config;

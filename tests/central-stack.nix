@@ -9,7 +9,7 @@ let
     DASHBOARD_USERNAME=kibanaserver
     DASHBOARD_PASSWORD=native-dashboard-test
     API_USERNAME=wazuh-wui
-    API_PASSWORD=wazuh-wui
+    API_PASSWORD=Native-Api-Test1!
   '';
 in
 pkgs.testers.nixosTest {
@@ -23,7 +23,7 @@ pkgs.testers.nixosTest {
       networking.hostName = "central";
       virtualisation = {
         cores = 4;
-        diskSize = 16384;
+        diskSize = 24576;
         memorySize = 6144;
       };
 
@@ -82,6 +82,11 @@ pkgs.testers.nixosTest {
 
     central.wait_for_unit("wazuh-indexer-security.service", timeout=service_timeout)
     central.wait_for_unit("wazuh-manager.service", timeout=service_timeout)
+    central.wait_until_succeeds(
+        "test \"$(systemctl show wazuh-manager-api-credentials.service -p ActiveState --value)\" = inactive; "
+        "test \"$(systemctl show wazuh-manager-api-credentials.service -p Result --value)\" = success",
+        timeout=poll_timeout,
+    )
     central.wait_for_unit("wazuh-filebeat.service", timeout=service_timeout)
     central.succeed(
         "curl --fail --silent --cacert ${certificates}/root-ca.pem --user admin:native-indexer-test "
@@ -96,8 +101,12 @@ pkgs.testers.nixosTest {
         "--user admin:native-indexer-test https://127.0.0.1:9200/_cluster/health"
     )
     central.succeed(
-        "curl --fail --silent --insecure --user wazuh-wui:wazuh-wui "
+        "curl --fail --silent --insecure --user 'wazuh-wui:Native-Api-Test1!' "
         "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q ."
+    )
+    central.fail(
+        "curl --fail --silent --insecure --user wazuh-wui:wazuh-wui "
+        "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true'"
     )
     central.succeed(
         "grep -q 'https://127.0.0.1:9200' /var/ossec/etc/ossec.conf"
@@ -105,7 +114,8 @@ pkgs.testers.nixosTest {
     central.succeed("test -s /etc/wazuh-dashboard/opensearch_dashboards.keystore")
     central.succeed(
         "${pkgs.jq}/bin/jq -e "
-        "'.hosts[0][\"1513629884013\"].url == \"https://127.0.0.1\"' "
+        "'.hosts[0][\"1513629884013\"] | "
+        ".url == \"https://127.0.0.1\" and .password == \"Native-Api-Test1!\"' "
         "/var/lib/wazuh-dashboard/wazuh/config/wazuh.yml"
     )
     central.wait_until_succeeds(
@@ -140,7 +150,7 @@ pkgs.testers.nixosTest {
     central.wait_for_unit("wazuh-filebeat.service", timeout=service_timeout)
     central.wait_for_unit("wazuh-dashboard.service", timeout=service_timeout)
     central.wait_until_succeeds(
-        "curl --fail --silent --insecure --user wazuh-wui:wazuh-wui "
+        "curl --fail --silent --insecure --user 'wazuh-wui:Native-Api-Test1!' "
         "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q .",
         timeout=poll_timeout,
     )
@@ -163,7 +173,7 @@ pkgs.testers.nixosTest {
         timeout=service_timeout,
     )
     central.wait_until_succeeds(
-        "curl --fail --silent --insecure --user wazuh-wui:wazuh-wui "
+        "curl --fail --silent --insecure --user 'wazuh-wui:Native-Api-Test1!' "
         "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q .",
         timeout=poll_timeout,
     )

@@ -31,8 +31,10 @@ pkgs.testers.nixosTest {
             ExecStart = pkgs.writeShellScript "wazuh-manager-test-credentials" ''
               set -eu
               install -d -m 0700 /run/wazuh-test
-              password="manager-$(cat /etc/machine-id)"
-              printf 'INDEXER_USERNAME=admin\nINDEXER_PASSWORD=%s\n' "$password" \
+              indexer_password="manager-$(cat /etc/machine-id)"
+              api_password="Native-Api1!$(cat /etc/machine-id)"
+              printf 'INDEXER_USERNAME=admin\nINDEXER_PASSWORD=%s\nAPI_USERNAME=wazuh-wui\nAPI_PASSWORD=%s\n' \
+                "$indexer_password" "$api_password" \
                 > /run/wazuh-test/manager.env
             '';
           };
@@ -44,6 +46,20 @@ pkgs.testers.nixosTest {
   testScript = ''
     start_all()
     manager.wait_for_unit("wazuh-manager.service")
+    manager.wait_until_succeeds(
+        "test \"$(systemctl show wazuh-manager-api-credentials.service -p ActiveState --value)\" = inactive; "
+        "test \"$(systemctl show wazuh-manager-api-credentials.service -p Result --value)\" = success"
+    )
+
+    manager.succeed(
+        "api_password=Native-Api1!$(cat /etc/machine-id); "
+        "curl --fail --silent --insecure --user \"wazuh-wui:$api_password\" "
+        "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q ."
+    )
+    manager.fail(
+        "curl --fail --silent --insecure --user wazuh-wui:wazuh-wui "
+        "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true'"
+    )
 
     manager.succeed(
         "test -z \"$(systemctl show wazuh-manager.service -p EnvironmentFiles --value)\""
@@ -53,16 +69,23 @@ pkgs.testers.nixosTest {
         "| grep -qF /run/wazuh-test/manager.env"
     )
     manager.succeed(
+        "systemctl show wazuh-manager-api-credentials.service -p EnvironmentFiles --value "
+        "| grep -qF /run/wazuh-test/manager.env"
+    )
+    manager.succeed(
         "test -z \"$(systemctl show wazuh-manager.service -p ExecStartPre --value)\""
     )
     manager.succeed("find /var/ossec/queue/keystore -type f -not -empty | grep -q .")
     manager.succeed(
         "for pid in $(cat /sys/fs/cgroup/system.slice/wazuh-manager.service/cgroup.procs); do "
         "! tr '\\0' '\\n' < /proc/$pid/environ "
-        "| grep -Eq '^(INDEXER_USERNAME|INDEXER_PASSWORD)=' || exit 1; "
+        "| grep -Eq '^(INDEXER_USERNAME|INDEXER_PASSWORD|API_USERNAME|API_PASSWORD)=' || exit 1; "
         "done"
     )
 
+    first_api_invocation = manager.succeed(
+        "systemctl show wazuh-manager-api-credentials.service -p InvocationID --value"
+    ).strip()
     first_invocation = manager.succeed(
         "systemctl show wazuh-manager-prepare.service -p InvocationID --value"
     ).strip()
@@ -72,12 +95,36 @@ pkgs.testers.nixosTest {
         "systemctl show wazuh-manager-prepare.service -p InvocationID --value"
     ).strip()
     assert first_invocation != second_invocation
+    manager.wait_until_succeeds(
+        "test \"$(systemctl show wazuh-manager-api-credentials.service -p InvocationID --value)\" "
+        f"!= {first_api_invocation}; "
+        "test \"$(systemctl show wazuh-manager-api-credentials.service -p ActiveState --value)\" = inactive; "
+        "test \"$(systemctl show wazuh-manager-api-credentials.service -p Result --value)\" = success"
+    )
 
     manager.succeed(
         "for pid in $(cat /sys/fs/cgroup/system.slice/wazuh-manager.service/cgroup.procs); do "
         "! tr '\\0' '\\n' < /proc/$pid/environ "
-        "| grep -Eq '^(INDEXER_USERNAME|INDEXER_PASSWORD)=' || exit 1; "
+        "| grep -Eq '^(INDEXER_USERNAME|INDEXER_PASSWORD|API_USERNAME|API_PASSWORD)=' || exit 1; "
         "done"
+    )
+
+    manager.succeed(
+        "indexer_password=manager-$(cat /etc/machine-id); "
+        "api_password=Rotated-Api1!$(cat /etc/machine-id); "
+        "printf 'INDEXER_USERNAME=admin\\nINDEXER_PASSWORD=%s\\nAPI_USERNAME=wazuh-wui\\nAPI_PASSWORD=%s\\n' "
+        "\"$indexer_password\" \"$api_password\" > /run/wazuh-test/manager.env; "
+        "systemctl start wazuh-manager-api-credentials.service"
+    )
+    manager.succeed(
+        "api_password=Rotated-Api1!$(cat /etc/machine-id); "
+        "curl --fail --silent --insecure --user \"wazuh-wui:$api_password\" "
+        "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q ."
+    )
+    manager.fail(
+        "api_password=Native-Api1!$(cat /etc/machine-id); "
+        "curl --fail --silent --insecure --user \"wazuh-wui:$api_password\" "
+        "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true'"
     )
   '';
 }

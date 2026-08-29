@@ -140,6 +140,10 @@ in
           message = "services.wazuh.dashboard.requireManager requires services.wazuh.manager.enable.";
         }
         {
+          assertion = !cfg.enable || !cfg.requireManager || wazuhCfg.manager.apiCredentials.enable;
+          message = "A dashboard requiring the manager also requires Wazuh manager API credential provisioning.";
+        }
+        {
           assertion = !cfg.enable || wazuhCfg.indexer.enable;
           message = "services.wazuh.dashboard requires services.wazuh.indexer.enable.";
         }
@@ -243,6 +247,7 @@ in
           "wazuh-indexer.service"
         ]
         ++ lib.optional cfg.requireManager "wazuh-manager.service"
+        ++ lib.optional cfg.requireManager "wazuh-manager-api-credentials.service"
         ++ lib.optional wazuhCfg.indexer.securityBootstrap.enable "wazuh-indexer-security.service";
         after = [
           "network-online.target"
@@ -250,6 +255,7 @@ in
           "wazuh-indexer.service"
         ]
         ++ lib.optional cfg.requireManager "wazuh-manager.service"
+        ++ lib.optional cfg.requireManager "wazuh-manager-api-credentials.service"
         ++ lib.optional wazuhCfg.indexer.securityBootstrap.enable "wazuh-indexer-security.service";
         wants = [ "network-online.target" ];
         serviceConfig = {

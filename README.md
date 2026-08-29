@@ -31,10 +31,10 @@ on any `wazuh-modulesd` kernel segfault or coredump. Manager-only tests use a
 standalone XML profile that disables vulnerability indexing; the complete-stack
 test exercises the indexer-backed configuration. A
 separate end-to-end test boots the complete TLS-enabled central stack,
-initializes OpenSearch security, authenticates with the manager API, starts the
-dashboard, forwards an alert through Filebeat, verifies the resulting index,
-restarts every central service, and verifies API and alert-pipeline recovery
-afterward.
+initializes OpenSearch security, replaces the default manager API password,
+authenticates with the provisioned credentials, starts the dashboard, forwards
+an alert through Filebeat, verifies the resulting index, restarts every central
+service, and verifies API and alert-pipeline recovery afterward.
 
 Certificate generation and existing state migration remain outside this
 flake's scope. The module installs supplied certificates and provisions
@@ -133,8 +133,12 @@ INDEXER_PASSWORD=replace-me
 DASHBOARD_USERNAME=kibanaserver
 DASHBOARD_PASSWORD=replace-me
 API_USERNAME=wazuh-wui
-API_PASSWORD=replace-me
+API_PASSWORD=Replace-This1!
 ```
+
+`API_PASSWORD` must be 8-64 characters and contain an uppercase letter, a
+lowercase letter, a number, and a special character. On a fresh installation,
+use the existing reserved `wazuh-wui` account for `API_USERNAME`.
 
 To retain a customized manager configuration declaratively, keep the XML next
 to the consuming NixOS configuration and set:
@@ -146,11 +150,18 @@ services.wazuh.manager.config = builtins.readFile ./wazuh-manager-ossec.conf;
 When this option is empty, the manager starts from the upstream package
 configuration and keeps its mutable copy under `/var/ossec/etc/ossec.conf`.
 
-The manager environment file is read only by its short-lived preparation unit.
-That unit writes the indexer username and password to Wazuh's keystore, then
-exits before the manager starts, so the manager daemons do not inherit the
-plaintext variables. Restart `wazuh-manager.service` after rotating the file;
-the preparation unit runs again on every manager start.
+The manager environment file is read only by short-lived preparation and API
+credential units. The preparation unit writes the indexer username and password
+to Wazuh's keystore, then exits before the manager starts. After the manager has
+initialized its RBAC database, the credential unit updates the existing API
+user only when its password differs and invalidates that user's existing API
+tokens. Neither unit passes plaintext variables to the long-running manager
+daemons. Both units run as part of every manager start, and the API credential
+unit also runs before a local dashboard starts.
+
+Manager API credential provisioning defaults to enabled whenever
+`services.wazuh.manager.environmentFile` is set. It can be controlled explicitly
+with `services.wazuh.manager.apiCredentials.enable`.
 
 On a fresh installation, the security bootstrap hashes `INDEXER_PASSWORD` and
 `DASHBOARD_PASSWORD` at runtime and replaces the bundled passwords for the
@@ -213,7 +224,7 @@ The application checks should confirm all of the following:
   `wazuh-alerts-4.x-*` index. Unit health alone does not prove this Filebeat
   path.
 
-The integrated VM test allocates four vCPUs, 6 GiB of memory, and a 16 GiB
+The integrated VM test allocates four vCPUs, 6 GiB of memory, and a 24 GiB
 disk. That is a test fixture, not a production sizing recommendation. Monitor
 indexer heap pressure and disk use and size the host for its actual agent and
 retention load.
@@ -263,6 +274,7 @@ certificates:
 
 ```console
 sudo systemctl restart wazuh-manager.service
+sudo systemctl restart wazuh-manager-api-credentials.service
 sudo systemctl restart wazuh-filebeat-prepare.service
 sudo systemctl restart wazuh-filebeat.service
 sudo systemctl restart wazuh-dashboard-prepare.service

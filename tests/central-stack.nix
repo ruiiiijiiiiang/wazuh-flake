@@ -10,6 +10,8 @@ let
     DASHBOARD_PASSWORD=native-dashboard-test
     API_USERNAME=wazuh-wui
     API_PASSWORD=Native-Api-Test1!
+    API_ADMIN_USERNAME=wazuh
+    API_ADMIN_PASSWORD=Native-Api-Admin1!
   '';
 in
 pkgs.testers.nixosTest {
@@ -104,8 +106,16 @@ pkgs.testers.nixosTest {
         "curl --fail --silent --insecure --user 'wazuh-wui:Native-Api-Test1!' "
         "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q ."
     )
+    central.succeed(
+        "curl --fail --silent --insecure --user 'wazuh:Native-Api-Admin1!' "
+        "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q ."
+    )
     central.fail(
         "curl --fail --silent --insecure --user wazuh-wui:wazuh-wui "
+        "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true'"
+    )
+    central.fail(
+        "curl --fail --silent --insecure --user wazuh:wazuh "
         "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true'"
     )
     central.succeed(
@@ -155,6 +165,11 @@ pkgs.testers.nixosTest {
         timeout=poll_timeout,
     )
     central.wait_until_succeeds(
+        "curl --fail --silent --insecure --user 'wazuh:Native-Api-Admin1!' "
+        "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q .",
+        timeout=poll_timeout,
+    )
+    central.wait_until_succeeds(
         "curl --fail --silent --insecure --user admin:native-indexer-test "
         "https://127.0.0.1:5601/api/status >/dev/null",
         timeout=poll_timeout,
@@ -174,6 +189,11 @@ pkgs.testers.nixosTest {
     )
     central.wait_until_succeeds(
         "curl --fail --silent --insecure --user 'wazuh-wui:Native-Api-Test1!' "
+        "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q .",
+        timeout=poll_timeout,
+    )
+    central.wait_until_succeeds(
+        "curl --fail --silent --insecure --user 'wazuh:Native-Api-Admin1!' "
         "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q .",
         timeout=poll_timeout,
     )

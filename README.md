@@ -31,7 +31,7 @@ on any `wazuh-modulesd` kernel segfault or coredump. Manager-only tests use a
 standalone XML profile that disables vulnerability indexing; the complete-stack
 test exercises the indexer-backed configuration. A
 separate end-to-end test boots the complete TLS-enabled central stack,
-initializes OpenSearch security, replaces the default manager API password,
+initializes OpenSearch security, replaces both default manager API passwords,
 authenticates with the provisioned credentials, starts the dashboard, forwards
 an alert through Filebeat, verifies the resulting index, restarts every central
 service, and verifies API and alert-pipeline recovery afterward.
@@ -134,11 +134,21 @@ DASHBOARD_USERNAME=kibanaserver
 DASHBOARD_PASSWORD=replace-me
 API_USERNAME=wazuh-wui
 API_PASSWORD=Replace-This1!
+API_ADMIN_USERNAME=wazuh
+API_ADMIN_PASSWORD=Replace-Admin1!
 ```
 
-`API_PASSWORD` must be 8-64 characters and contain an uppercase letter, a
-lowercase letter, a number, and a special character. On a fresh installation,
-use the existing reserved `wazuh-wui` account for `API_USERNAME`.
+`API_USERNAME` must be `wazuh-wui`, and `API_ADMIN_USERNAME` must be `wazuh`.
+Both API passwords must be different, 8-64 characters long, and contain an
+uppercase letter, a lowercase letter, a number, and a special character. These
+requirements ensure that neither upstream reserved administrator account keeps
+its default password.
+
+The environment file can be an agenix secret such as
+`config.age.secrets.wazuh-credentials.path`. Agenix decrypts it at runtime, so
+the plaintext values do not enter the Nix store. A root-owned mode of `0400` is
+sufficient because systemd reads the environment file for the preparation
+units.
 
 To retain a customized manager configuration declaratively, keep the XML next
 to the consuming NixOS configuration and set:
@@ -153,11 +163,12 @@ configuration and keeps its mutable copy under `/var/ossec/etc/ossec.conf`.
 The manager environment file is read only by short-lived preparation and API
 credential units. The preparation unit writes the indexer username and password
 to Wazuh's keystore, then exits before the manager starts. After the manager has
-initialized its RBAC database, the credential unit updates the existing API
-user only when its password differs and invalidates that user's existing API
-tokens. Neither unit passes plaintext variables to the long-running manager
-daemons. Both units run as part of every manager start, and the API credential
-unit also runs before a local dashboard starts.
+initialized its RBAC database, the credential unit updates the reserved
+`wazuh-wui` and `wazuh` API users only when their passwords differ and
+invalidates those users' existing API tokens. Neither unit passes plaintext
+variables to the long-running manager daemons. Both units run as part of every
+manager start, and the API credential unit also runs before a local dashboard
+starts.
 
 Manager API credential provisioning defaults to enabled whenever
 `services.wazuh.manager.environmentFile` is set. It can be controlled explicitly

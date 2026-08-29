@@ -33,8 +33,9 @@ pkgs.testers.nixosTest {
               install -d -m 0700 /run/wazuh-test
               indexer_password="manager-$(cat /etc/machine-id)"
               api_password="Native-Api1!$(cat /etc/machine-id)"
-              printf 'INDEXER_USERNAME=admin\nINDEXER_PASSWORD=%s\nAPI_USERNAME=wazuh-wui\nAPI_PASSWORD=%s\n' \
-                "$indexer_password" "$api_password" \
+              api_admin_password="Native-Admin1!$(cat /etc/machine-id)"
+              printf 'INDEXER_USERNAME=admin\nINDEXER_PASSWORD=%s\nAPI_USERNAME=wazuh-wui\nAPI_PASSWORD=%s\nAPI_ADMIN_USERNAME=wazuh\nAPI_ADMIN_PASSWORD=%s\n' \
+                "$indexer_password" "$api_password" "$api_admin_password" \
                 > /run/wazuh-test/manager.env
             '';
           };
@@ -56,8 +57,17 @@ pkgs.testers.nixosTest {
         "curl --fail --silent --insecure --user \"wazuh-wui:$api_password\" "
         "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q ."
     )
+    manager.succeed(
+        "api_admin_password=Native-Admin1!$(cat /etc/machine-id); "
+        "curl --fail --silent --insecure --user \"wazuh:$api_admin_password\" "
+        "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q ."
+    )
     manager.fail(
         "curl --fail --silent --insecure --user wazuh-wui:wazuh-wui "
+        "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true'"
+    )
+    manager.fail(
+        "curl --fail --silent --insecure --user wazuh:wazuh "
         "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true'"
     )
 
@@ -79,7 +89,7 @@ pkgs.testers.nixosTest {
     manager.succeed(
         "for pid in $(cat /sys/fs/cgroup/system.slice/wazuh-manager.service/cgroup.procs); do "
         "! tr '\\0' '\\n' < /proc/$pid/environ "
-        "| grep -Eq '^(INDEXER_USERNAME|INDEXER_PASSWORD|API_USERNAME|API_PASSWORD)=' || exit 1; "
+        "| grep -Eq '^(INDEXER_USERNAME|INDEXER_PASSWORD|API_USERNAME|API_PASSWORD|API_ADMIN_USERNAME|API_ADMIN_PASSWORD)=' || exit 1; "
         "done"
     )
 
@@ -105,15 +115,27 @@ pkgs.testers.nixosTest {
     manager.succeed(
         "for pid in $(cat /sys/fs/cgroup/system.slice/wazuh-manager.service/cgroup.procs); do "
         "! tr '\\0' '\\n' < /proc/$pid/environ "
-        "| grep -Eq '^(INDEXER_USERNAME|INDEXER_PASSWORD|API_USERNAME|API_PASSWORD)=' || exit 1; "
+        "| grep -Eq '^(INDEXER_USERNAME|INDEXER_PASSWORD|API_USERNAME|API_PASSWORD|API_ADMIN_USERNAME|API_ADMIN_PASSWORD)=' || exit 1; "
         "done"
+    )
+
+    manager.succeed(
+        "api_password=Native-Api1!$(cat /etc/machine-id); "
+        "curl --fail --silent --insecure --user \"wazuh-wui:$api_password\" "
+        "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q ."
+    )
+    manager.succeed(
+        "api_admin_password=Native-Admin1!$(cat /etc/machine-id); "
+        "curl --fail --silent --insecure --user \"wazuh:$api_admin_password\" "
+        "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q ."
     )
 
     manager.succeed(
         "indexer_password=manager-$(cat /etc/machine-id); "
         "api_password=Rotated-Api1!$(cat /etc/machine-id); "
-        "printf 'INDEXER_USERNAME=admin\\nINDEXER_PASSWORD=%s\\nAPI_USERNAME=wazuh-wui\\nAPI_PASSWORD=%s\\n' "
-        "\"$indexer_password\" \"$api_password\" > /run/wazuh-test/manager.env; "
+        "api_admin_password=Rotated-Admin1!$(cat /etc/machine-id); "
+        "printf 'INDEXER_USERNAME=admin\\nINDEXER_PASSWORD=%s\\nAPI_USERNAME=wazuh-wui\\nAPI_PASSWORD=%s\\nAPI_ADMIN_USERNAME=wazuh\\nAPI_ADMIN_PASSWORD=%s\\n' "
+        "\"$indexer_password\" \"$api_password\" \"$api_admin_password\" > /run/wazuh-test/manager.env; "
         "systemctl start wazuh-manager-api-credentials.service"
     )
     manager.succeed(
@@ -121,9 +143,19 @@ pkgs.testers.nixosTest {
         "curl --fail --silent --insecure --user \"wazuh-wui:$api_password\" "
         "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q ."
     )
+    manager.succeed(
+        "api_admin_password=Rotated-Admin1!$(cat /etc/machine-id); "
+        "curl --fail --silent --insecure --user \"wazuh:$api_admin_password\" "
+        "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q ."
+    )
     manager.fail(
         "api_password=Native-Api1!$(cat /etc/machine-id); "
         "curl --fail --silent --insecure --user \"wazuh-wui:$api_password\" "
+        "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true'"
+    )
+    manager.fail(
+        "api_admin_password=Native-Admin1!$(cat /etc/machine-id); "
+        "curl --fail --silent --insecure --user \"wazuh:$api_admin_password\" "
         "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true'"
     )
   '';

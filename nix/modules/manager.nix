@@ -12,6 +12,69 @@ let
     inherit pkgs;
     version = wazuhCfg.version;
   };
+  managerStop = pkgs.writeShellScript "wazuh-manager-stop" /* bash */ ''
+    set -eu
+
+    modulesd_pids=()
+    for pid_file in /var/ossec/var/run/wazuh-modulesd-*.pid; do
+      [ -e "$pid_file" ] || continue
+      while IFS= read -r pid; do
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+          modulesd_pids+=("$pid")
+        fi
+      done < "$pid_file"
+    done
+
+    if [ "''${#modulesd_pids[@]}" -gt 0 ]; then
+      # Wazuh 4.14.7 aborts in the inventory teardown handler when the
+      # indexer integration is enabled. Avoid the faulty handler until the
+      # upstream binary provides a safe shutdown path.
+      kill -${if cfg.requireIndexer then "KILL" else "TERM"} "''${modulesd_pids[@]}"
+
+      remaining=30
+      while [ "$remaining" -gt 0 ]; do
+        running=false
+        for pid in "''${modulesd_pids[@]}"; do
+          if kill -0 "$pid" 2>/dev/null; then
+            running=true
+            break
+          fi
+        done
+        [ "$running" = true ] || break
+        sleep 1
+        remaining=$((remaining - 1))
+      done
+    fi
+
+    exec /var/ossec/bin/wazuh-control stop
+  '';
+  managerReady = pkgs.writeShellScript "wazuh-manager-ready" /* bash */ ''
+    set -eu
+
+    log_file=/var/ossec/logs/ossec.log
+    log_offset=$(cat /run/wazuh-manager-log-offset)
+    remaining=300
+
+    while [ "$remaining" -gt 0 ]; do
+      if [ -f "$log_file" ]; then
+        if tail -c "+$((log_offset + 1))" "$log_file" \
+          | grep -Fq 'InventoryHarvesterFacade module started.'; then
+          exit 0
+        fi
+        if tail -c "+$((log_offset + 1))" "$log_file" \
+          | grep -Fq 'InventoryHarvesterFacade::start:'; then
+          echo "Wazuh inventory harvester failed during manager startup" >&2
+          exit 1
+        fi
+      fi
+
+      sleep 1
+      remaining=$((remaining - 1))
+    done
+
+    echo "Timed out waiting for the Wazuh inventory harvester" >&2
+    exit 1
+  '';
 in
 {
   options.services.wazuh.manager = {
@@ -181,6 +244,12 @@ in
             printf '%s\n' "${cfg.package}" > "$package_marker"
             chown root:wazuh "$package_marker"
             chmod 0640 "$package_marker"
+            if [ -f /var/ossec/logs/ossec.log ]; then
+              stat -c %s /var/ossec/logs/ossec.log > /run/wazuh-manager-log-offset
+            else
+              printf '0\n' > /run/wazuh-manager-log-offset
+            fi
+            chmod 0600 /run/wazuh-manager-log-offset
           '';
         };
       };
@@ -204,19 +273,23 @@ in
         path = [
           pkgs.coreutils
           pkgs.gawk
+          pkgs.gnugrep
           pkgs.procps
         ];
         serviceConfig = {
           Type = "forking";
           ExecStart = "/var/ossec/bin/wazuh-control start";
-          ExecStop = "/var/ossec/bin/wazuh-control stop";
+          ExecStop = managerStop;
           ExecReload = "/var/ossec/bin/wazuh-control restart";
           Restart = "on-failure";
           RestartSec = 5;
-          TimeoutStartSec = 300;
+          TimeoutStartSec = 420;
           TimeoutStopSec = 120;
           KillMode = "control-group";
           ReadWritePaths = [ "/var/ossec" ];
+        }
+        // lib.optionalAttrs cfg.requireIndexer {
+          ExecStartPost = managerReady;
         };
       };
       environment.etc."wazuh/manager.conf".text = cfg.config;

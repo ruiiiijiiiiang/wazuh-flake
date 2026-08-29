@@ -125,11 +125,73 @@ pkgs.testers.nixosTest {
         timeout=poll_timeout,
     )
 
-    central.succeed("systemctl restart wazuh-manager.service")
-    central.wait_for_unit("wazuh-manager.service", timeout=service_timeout)
-    central.succeed("systemctl restart wazuh-filebeat.service")
-    central.wait_for_unit("wazuh-filebeat.service", timeout=service_timeout)
     central.succeed("systemctl restart wazuh-dashboard.service")
     central.wait_for_unit("wazuh-dashboard.service", timeout=service_timeout)
+    central.wait_until_succeeds(
+        "curl --fail --silent --insecure --user admin:native-indexer-test "
+        "https://127.0.0.1:5601/api/status >/dev/null",
+        timeout=poll_timeout,
+    )
+    central.succeed("systemctl restart wazuh-filebeat.service")
+    central.wait_for_unit("wazuh-filebeat.service", timeout=service_timeout)
+
+    central.succeed("systemctl restart wazuh-manager.service")
+    central.wait_for_unit("wazuh-manager.service", timeout=service_timeout)
+    central.wait_for_unit("wazuh-filebeat.service", timeout=service_timeout)
+    central.wait_for_unit("wazuh-dashboard.service", timeout=service_timeout)
+    central.wait_until_succeeds(
+        "curl --fail --silent --insecure --user wazuh-wui:wazuh-wui "
+        "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q .",
+        timeout=poll_timeout,
+    )
+    central.wait_until_succeeds(
+        "curl --fail --silent --insecure --user admin:native-indexer-test "
+        "https://127.0.0.1:5601/api/status >/dev/null",
+        timeout=poll_timeout,
+    )
+
+    central.succeed("systemctl restart wazuh-indexer.service")
+    central.wait_for_unit("wazuh-indexer.service", timeout=service_timeout)
+    central.wait_for_unit("wazuh-indexer-security.service", timeout=service_timeout)
+    central.wait_for_unit("wazuh-manager.service", timeout=service_timeout)
+    central.wait_for_unit("wazuh-filebeat.service", timeout=service_timeout)
+    central.wait_for_unit("wazuh-dashboard.service", timeout=service_timeout)
+    central.wait_until_succeeds(
+        "curl --fail --silent --cacert ${certificates}/root-ca.pem --user admin:native-indexer-test "
+        "'https://127.0.0.1:9200/_cluster/health?wait_for_status=green&"
+        "wait_for_no_relocating_shards=true&wait_for_no_initializing_shards=true&timeout=180s' >/dev/null",
+        timeout=service_timeout,
+    )
+    central.wait_until_succeeds(
+        "curl --fail --silent --insecure --user wazuh-wui:wazuh-wui "
+        "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q .",
+        timeout=poll_timeout,
+    )
+    central.wait_until_succeeds(
+        "curl --fail --silent --insecure --user admin:native-indexer-test "
+        "https://127.0.0.1:5601/api/status >/dev/null",
+        timeout=poll_timeout,
+    )
+
+    central.succeed(
+        "printf '%s\\n' "
+        "'{\"timestamp\":\"2026-08-28T12:00:00.000+0000\",\"rule\":{\"level\":3,\"description\":\"native central stack restart test\",\"id\":\"100002\",\"groups\":[\"test\"]},\"agent\":{\"id\":\"000\",\"name\":\"central\"},\"manager\":{\"name\":\"central\"},\"id\":\"1756382400.2\",\"full_log\":\"native-central-stack-restart-test\",\"decoder\":{\"name\":\"json\"},\"location\":\"nixos-test\"}' "
+        ">> /var/ossec/logs/alerts/alerts.json"
+    )
+    central.wait_until_succeeds(
+        "curl --fail --silent --cacert ${certificates}/root-ca.pem --user admin:native-indexer-test "
+        "--header 'Content-Type: application/json' "
+        "--data '{\"query\":{\"match_phrase\":{\"full_log\":\"native-central-stack-restart-test\"}}}' "
+        "'https://127.0.0.1:9200/wazuh-alerts-4.x-*/_count' | "
+        "${pkgs.jq}/bin/jq -e '.count >= 1'",
+        timeout=poll_timeout,
+    )
+
+    central.succeed(
+        "! journalctl --boot --dmesg --no-pager | grep -E 'wazuh-modulesd.*segfault'"
+    )
+    central.succeed(
+        "! journalctl --boot --no-pager -t systemd-coredump | grep -F wazuh-modulesd"
+    )
   '';
 }

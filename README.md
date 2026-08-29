@@ -33,7 +33,8 @@ test exercises the indexer-backed configuration. A
 separate end-to-end test boots the complete TLS-enabled central stack,
 initializes OpenSearch security, authenticates with the manager API, starts the
 dashboard, forwards an alert through Filebeat, verifies the resulting index,
-and restarts all non-indexer services.
+restarts every central service, and verifies API and alert-pipeline recovery
+afterward.
 
 Certificate generation and existing state migration remain outside this
 flake's scope. The module installs supplied certificates and provisions
@@ -135,6 +136,16 @@ API_USERNAME=wazuh-wui
 API_PASSWORD=replace-me
 ```
 
+To retain a customized manager configuration declaratively, keep the XML next
+to the consuming NixOS configuration and set:
+
+```nix
+services.wazuh.manager.config = builtins.readFile ./wazuh-manager-ossec.conf;
+```
+
+When this option is empty, the manager starts from the upstream package
+configuration and keeps its mutable copy under `/var/ossec/etc/ossec.conf`.
+
 The manager environment file is read only by its short-lived preparation unit.
 That unit writes the indexer username and password to Wazuh's keystore, then
 exits before the manager starts, so the manager daemons do not inherit the
@@ -168,12 +179,131 @@ set.
 Wazuh central components must use identical versions, including patch level.
 Agents should not be newer than their manager.
 
+## Production operations
+
+### Startup and health
+
+On an all-in-one host, systemd orders indexer preparation, indexer startup,
+one-time security initialization, manager preparation, the manager, Filebeat,
+and the dashboard. A normal boot does not require manually starting components
+in sequence.
+
+Use both unit state and application-level checks when validating a deployment:
+
+```console
+sudo systemctl --failed
+sudo systemctl is-active \
+  wazuh-indexer.service \
+  wazuh-indexer-security.service \
+  wazuh-manager.service \
+  wazuh-filebeat.service \
+  wazuh-dashboard.service
+```
+
+The application checks should confirm all of the following:
+
+- `GET https://127.0.0.1:9200/_cluster/health` authenticates with the indexer
+  credentials and reports at least yellow health (green for the default
+  single-node configuration).
+- `POST https://127.0.0.1:55000/security/user/authenticate?raw=true`
+  authenticates with the Wazuh API credentials.
+- `GET https://127.0.0.1:5601/api/status` returns successfully with an
+  authorized indexer account.
+- A fresh record appended by the manager appears in a
+  `wazuh-alerts-4.x-*` index. Unit health alone does not prove this Filebeat
+  path.
+
+The integrated VM test allocates four vCPUs, 6 GiB of memory, and a 16 GiB
+disk. That is a test fixture, not a production sizing recommendation. Monitor
+indexer heap pressure and disk use and size the host for its actual agent and
+retention load.
+
+Wazuh 4.14.7's `wazuh-modulesd` aborts in its inventory teardown path when the
+indexer integration is enabled. For that configuration, this module kills only
+`wazuh-modulesd` before asking `wazuh-control` to stop the remaining daemons;
+standalone managers keep the normal graceful stop path. The central-stack test
+guards against the resulting segfault and core dump. Reassess and remove this
+workaround when upgrading Wazuh after the same test demonstrates that upstream
+shutdown is safe.
+
+### Persistent state and backups
+
+The default mutable paths are:
+
+| Component | Paths | Purpose |
+| --- | --- | --- |
+| Manager | `/var/ossec` | Configuration, enrollment identity, agent state, queues, and logs |
+| Indexer | `/var/lib/wazuh-indexer`, `/etc/wazuh-indexer` | OpenSearch data and prepared runtime configuration |
+| Filebeat | `/var/lib/filebeat`, `/etc/filebeat` | Registry, keystore, and prepared runtime configuration |
+| Dashboard | `/var/lib/wazuh-dashboard`, `/etc/wazuh-dashboard` | Plugin data, keystore, and prepared runtime configuration |
+
+Keep the Nix configuration and the external certificate and secret sources as
+the authoritative configuration backup. If only configuration and enrollment
+identity need to survive, back up `/var/ossec/etc`; alert logs do not need to
+be retained. Back up the rest of `/var/ossec` when agent metadata and queue
+state are also required.
+
+Indexer alert data does not need to be backed up when event retention is not a
+requirement. If it is retained, use an OpenSearch snapshot or a storage
+snapshot taken while the indexer is stopped; do not file-copy a live data
+directory. Filebeat and dashboard state can be reconstructed from the module,
+runtime credentials, and certificates.
+
+### Credential and certificate rotation
+
+The security bootstrap only sets the initial `admin` and `kibanaserver`
+passwords. After initialization, rotate those accounts through the OpenSearch
+Security API or Wazuh's password tooling, then update the runtime environment
+file. Changing that file alone does not update passwords stored in the
+security index.
+
+Preparation units for Filebeat and the dashboard remain active after their
+first successful run. Explicitly rerun them after changing credentials or
+certificates:
+
+```console
+sudo systemctl restart wazuh-manager.service
+sudo systemctl restart wazuh-filebeat-prepare.service
+sudo systemctl restart wazuh-filebeat.service
+sudo systemctl restart wazuh-dashboard-prepare.service
+sudo systemctl restart wazuh-dashboard.service
+```
+
+The manager preparation step runs on every manager start. For certificate
+rotation, replace all related secret files first, then rerun the corresponding
+prepare unit before restarting each service. Rerun
+`wazuh-indexer-prepare.service` before restarting the indexer. Rotate a root CA
+and all certificates issued by it as one coordinated maintenance operation.
+
+### Upgrades and rollback
+
+Treat a Wazuh update as an atomic central-stack change:
+
+1. Update the shared Wazuh version and every architecture-specific release
+   hash in `nix/packages.nix`. Update Filebeat inputs only when Wazuh's release
+   requires it.
+2. Build all packages and run the security-bootstrap, manager lifecycle, secret
+   isolation, and central-stack tests.
+3. Take the required manager backup and, when alert retention matters, an
+   indexer snapshot.
+4. Deploy the indexer, manager, Filebeat, and dashboard from the same flake
+   revision. Upgrade agents afterward and never make them newer than the
+   manager.
+5. Verify unit state, all three authenticated APIs, and delivery of a new alert.
+
+A NixOS generation rollback restores packages and unit definitions, but it
+does not roll mutable state back. Do not start an older indexer against data
+that a newer release has migrated unless upstream explicitly supports that
+downgrade. Restore the matching indexer snapshot or roll forward instead.
+
 ## Validation
 
 ```console
 nix flake check
 nix flake check --all-systems --no-build
+nix build .#agent .#manager .#indexer .#dashboard .#filebeat --no-link
 nix build .#checks.x86_64-linux.manager-secret-isolation
 nix build .#checks.x86_64-linux.manager-restart-stress
+nix build .#checks.x86_64-linux.security-bootstrap
 nix build .#checks.x86_64-linux.central-stack
 ```

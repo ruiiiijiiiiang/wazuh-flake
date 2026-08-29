@@ -184,6 +184,7 @@ in
           exit 1
         '';
         Restart = "on-failure";
+        SuccessExitStatus = 143;
         LimitMEMLOCK = "infinity";
         LimitNOFILE = 65535;
         TimeoutStartSec = 180;

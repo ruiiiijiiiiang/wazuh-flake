@@ -65,8 +65,6 @@ pkgs.testers.nixosTest {
           environmentFile = credentials;
           certificates = {
             rootCA = "${certificates}/root-ca.pem";
-            certificate = "${certificates}/dashboard.pem";
-            key = "${certificates}/dashboard-key.pem";
           };
         };
       };
@@ -122,6 +120,8 @@ pkgs.testers.nixosTest {
         "grep -q 'https://127.0.0.1:9200' /var/ossec/etc/ossec.conf"
     )
     central.succeed("test -s /etc/wazuh-dashboard/opensearch_dashboards.keystore")
+    central.succeed("grep -qxF 'server.ssl.enabled: false' /etc/wazuh-dashboard/opensearch_dashboards.yml")
+    central.succeed("! grep -q '^server.ssl.\\(certificate\\|key\\):' /etc/wazuh-dashboard/opensearch_dashboards.yml")
     central.succeed(
         "${pkgs.jq}/bin/jq -e "
         "'.hosts[0][\"1513629884013\"] | "
@@ -129,8 +129,8 @@ pkgs.testers.nixosTest {
         "/var/lib/wazuh-dashboard/wazuh/config/wazuh.yml"
     )
     central.wait_until_succeeds(
-        "curl --fail --silent --insecure --user admin:native-indexer-test "
-        "https://127.0.0.1:5601/api/status >/dev/null",
+        "curl --fail --silent --user admin:native-indexer-test "
+        "http://127.0.0.1:5601/api/status >/dev/null",
         timeout=poll_timeout,
     )
 
@@ -148,8 +148,8 @@ pkgs.testers.nixosTest {
     central.succeed("systemctl restart wazuh-dashboard.service")
     central.wait_for_unit("wazuh-dashboard.service", timeout=service_timeout)
     central.wait_until_succeeds(
-        "curl --fail --silent --insecure --user admin:native-indexer-test "
-        "https://127.0.0.1:5601/api/status >/dev/null",
+        "curl --fail --silent --user admin:native-indexer-test "
+        "http://127.0.0.1:5601/api/status >/dev/null",
         timeout=poll_timeout,
     )
     central.succeed("systemctl restart wazuh-filebeat.service")
@@ -170,8 +170,8 @@ pkgs.testers.nixosTest {
         timeout=poll_timeout,
     )
     central.wait_until_succeeds(
-        "curl --fail --silent --insecure --user admin:native-indexer-test "
-        "https://127.0.0.1:5601/api/status >/dev/null",
+        "curl --fail --silent --user admin:native-indexer-test "
+        "http://127.0.0.1:5601/api/status >/dev/null",
         timeout=poll_timeout,
     )
 
@@ -198,8 +198,8 @@ pkgs.testers.nixosTest {
         timeout=poll_timeout,
     )
     central.wait_until_succeeds(
-        "curl --fail --silent --insecure --user admin:native-indexer-test "
-        "https://127.0.0.1:5601/api/status >/dev/null",
+        "curl --fail --silent --user admin:native-indexer-test "
+        "http://127.0.0.1:5601/api/status >/dev/null",
         timeout=poll_timeout,
     )
 

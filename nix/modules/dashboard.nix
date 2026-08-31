@@ -12,6 +12,7 @@ let
     inherit pkgs;
     version = wazuhCfg.version;
   };
+  dashboardTlsEnabled = cfg.certificates.certificate != null && cfg.certificates.key != null;
   dashboardConfig =
     if cfg.config != "" then
       cfg.config
@@ -24,6 +25,7 @@ let
           "@CONFIG_DIR@"
           "@DATA_DIR@"
           "@SERVER_SSL_ENABLED@"
+          "@SERVER_SSL_CONFIGURATION@"
         ]
         [
           cfg.bindAddress
@@ -31,7 +33,11 @@ let
           cfg.indexerUrl
           cfg.configDir
           cfg.dataDir
-          (if cfg.certificates.certificate != null && cfg.certificates.key != null then "true" else "false")
+          (if dashboardTlsEnabled then "true" else "false")
+          (lib.optionalString dashboardTlsEnabled ''
+            server.ssl.certificate: "${cfg.configDir}/certs/dashboard.pem"
+            server.ssl.key: "${cfg.configDir}/certs/dashboard-key.pem"
+          '')
         ]
         (lib.readFile ../opensearch_dashboards.yml);
   dashboardConfigFile = pkgs.writeText "opensearch_dashboards.yml" dashboardConfig;
@@ -155,6 +161,10 @@ in
           assertion = !cfg.enable || cfg.certificates.rootCA != null;
           message = "The Wazuh dashboard requires the indexer root CA certificate.";
         }
+        {
+          assertion = !cfg.enable || (cfg.certificates.certificate == null) == (cfg.certificates.key == null);
+          message = "Wazuh dashboard TLS certificate and key must be configured together.";
+        }
       ];
     }
     (lib.mkIf cfg.enable {
@@ -203,10 +213,8 @@ in
             ${lib.optionalString (cfg.certificates.rootCA != null) ''
               install -o wazuh-dashboard -g wazuh-dashboard -m 0400 ${cfg.certificates.rootCA} ${cfg.configDir}/certs/root-ca.pem
             ''}
-            ${lib.optionalString (cfg.certificates.certificate != null) ''
+            ${lib.optionalString dashboardTlsEnabled ''
               install -o wazuh-dashboard -g wazuh-dashboard -m 0400 ${cfg.certificates.certificate} ${cfg.configDir}/certs/dashboard.pem
-            ''}
-            ${lib.optionalString (cfg.certificates.key != null) ''
               install -o wazuh-dashboard -g wazuh-dashboard -m 0400 ${cfg.certificates.key} ${cfg.configDir}/certs/dashboard-key.pem
             ''}
             install -o root -g wazuh-dashboard -m 0640 ${dashboardConfigFile} ${cfg.configDir}/opensearch_dashboards.yml
@@ -269,7 +277,7 @@ in
             for attempt in $(seq 1 60); do
               status=$(${pkgs.curl}/bin/curl -k -s -o /dev/null -w '%{http_code}' \
                 "${
-                  if cfg.certificates.certificate != null && cfg.certificates.key != null then "https" else "http"
+                  if dashboardTlsEnabled then "https" else "http"
                 }://127.0.0.1:${toString cfg.port}/api/status" || true)
               if [ "$status" = 200 ] || [ "$status" = 401 ] || [ "$status" = 403 ]; then
                 exit 0

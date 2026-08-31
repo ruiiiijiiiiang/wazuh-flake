@@ -117,13 +117,16 @@ in
       environmentFile = credentials;
       certificates = {
         inherit rootCA;
-        certificate = "/run/agenix/wazuh-dashboard-cert";
-        key = "/run/agenix/wazuh-dashboard-key";
       };
     };
   };
 }
 ```
+
+With no dashboard certificate and key, the dashboard serves HTTP on its
+localhost bind address for a local TLS-terminating reverse proxy. Set both
+`services.wazuh.dashboard.certificates.certificate` and `key` to enable HTTPS
+directly on the dashboard listener.
 
 The environment file must contain these shell-style assignments:
 
@@ -229,8 +232,8 @@ The application checks should confirm all of the following:
   single-node configuration).
 - `POST https://127.0.0.1:55000/security/user/authenticate?raw=true`
   authenticates with the Wazuh API credentials.
-- `GET https://127.0.0.1:5601/api/status` returns successfully with an
-  authorized indexer account.
+- `GET http://127.0.0.1:5601/api/status` returns successfully with an
+  authorized indexer account. Use HTTPS instead when dashboard TLS is enabled.
 - A fresh record appended by the manager appears in a
   `wazuh-alerts-4.x-*` index. Unit health alone does not prove this Filebeat
   path.

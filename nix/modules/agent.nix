@@ -70,7 +70,7 @@ in
       };
       systemd.tmpfiles.rules = [
         "d /var/ossec 0750 root wazuh -"
-        "d /var/ossec/etc 0750 root wazuh -"
+        "d /var/ossec/etc 0770 wazuh wazuh -"
         "d /var/ossec/logs 0750 wazuh wazuh -"
         "d /var/ossec/queue 0750 wazuh wazuh -"
         "d /var/ossec/queue/sockets 0770 wazuh wazuh -"
@@ -91,7 +91,8 @@ in
           Type = "forking";
           ExecStartPre = pkgs.writeShellScript "wazuh-agent-prepare" ''
             set -eu
-            install -d -m 0750 -o root -g wazuh /var/ossec /var/ossec/etc
+            install -d -m 0750 -o root -g wazuh /var/ossec
+            install -d -m 0770 -o wazuh -g wazuh /var/ossec/etc
             package_marker=/var/ossec/.wazuh-agent-package
             if [ ! -f "$package_marker" ] || [ "$(cat "$package_marker")" != "${cfg.package}" ]; then
               if [ -f /var/ossec/etc/client.keys ]; then
@@ -103,6 +104,10 @@ in
                 install -o wazuh -g wazuh -m 0640 /run/wazuh-agent-client.keys /var/ossec/etc/client.keys
                 rm -f /run/wazuh-agent-client.keys
               fi
+            fi
+            if [ -f /var/ossec/etc/client.keys ]; then
+              chown wazuh:wazuh /var/ossec/etc/client.keys
+              chmod 0640 /var/ossec/etc/client.keys
             fi
             install -o root -g wazuh -m 0640 /etc/wazuh/ossec.conf /var/ossec/etc/ossec.conf
             printf '%s\n' "${cfg.package}" > "$package_marker"

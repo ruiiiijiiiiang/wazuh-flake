@@ -12,6 +12,12 @@ pkgs.testers.nixosTest {
         services.wazuh.agent = {
           enable = true;
           managerAddress = "192.168.1.2";
+          extraConfig = /* xml */ ''
+            <localfile>
+              <log_format>syslog</log_format>
+              <location>/var/log/test-agent.log</location>
+            </localfile>
+          '';
         };
       };
 
@@ -46,6 +52,7 @@ pkgs.testers.nixosTest {
     agent.wait_for_unit("wazuh-agent.service")
     agent.succeed("test -e /etc/wazuh/ossec.conf")
     agent.succeed("grep -q 192.168.1.2 /etc/wazuh/ossec.conf")
+    agent.succeed("grep -q /var/log/test-agent.log /etc/wazuh/ossec.conf")
     agent.succeed("test -s /var/ossec/.wazuh-agent-package")
     agent.succeed("systemctl show wazuh-agent.service -p Type --value | grep -qx forking")
     manager.wait_until_succeeds(

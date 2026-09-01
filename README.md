@@ -72,6 +72,19 @@ services.wazuh.agent = {
 };
 ```
 
+The generated agent configuration is a generic enrollment baseline. Add
+host-specific monitoring policy through `extraConfig`; use `config` only when
+replacing the whole generated configuration:
+
+```nix
+services.wazuh.agent.extraConfig = /* xml */ ''
+  <localfile>
+    <log_format>journald</log_format>
+    <location>journald</location>
+  </localfile>
+'';
+```
+
 A central host can enable all four server-side services without supplying
 certificate files or internal service credentials. It only needs a managed
 dashboard-administrator password:

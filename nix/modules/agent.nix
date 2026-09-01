@@ -17,8 +17,20 @@ let
       cfg.config
     else
       lib.replaceStrings
-        [ "@MANAGER_ADDRESS@" "@MANAGER_PORT@" "@ENROLLMENT_PORT@" ]
-        [ cfg.managerAddress (toString cfg.managerPort) (toString cfg.enrollmentPort) ]
+        [
+          "@AGENT_NAME@"
+          "@MANAGER_ADDRESS@"
+          "@MANAGER_PORT@"
+          "@ENROLLMENT_PORT@"
+          "@EXTRA_CONFIG@"
+        ]
+        [
+          cfg.agentName
+          cfg.managerAddress
+          (toString cfg.managerPort)
+          (toString cfg.enrollmentPort)
+          cfg.extraConfig
+        ]
         (lib.readFile ../ossec.conf);
 in
 {
@@ -34,6 +46,11 @@ in
       default = "127.0.0.1";
       description = "Address of the Wazuh manager.";
     };
+    agentName = lib.mkOption {
+      type = lib.types.str;
+      default = config.networking.hostName;
+      description = "Name used when enrolling this Wazuh agent.";
+    };
     managerPort = lib.mkOption {
       type = lib.types.port;
       default = 1514;
@@ -48,6 +65,11 @@ in
       type = lib.types.lines;
       default = "";
       description = "Complete ossec.conf content; an enrollment config is generated when empty.";
+    };
+    extraConfig = lib.mkOption {
+      type = lib.types.lines;
+      default = "";
+      description = "Additional XML inserted into the generated baseline agent configuration.";
     };
   };
 

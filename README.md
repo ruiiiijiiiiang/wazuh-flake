@@ -36,10 +36,11 @@ authenticates with the provisioned credentials, starts the dashboard, forwards
 an alert through Filebeat, verifies the resulting index, restarts every central
 service, and verifies API and alert-pipeline recovery afterward.
 
-Certificate provisioning can be delegated to the flake for standalone central
-stacks. It generates a persistent local CA plus indexer, security-admin, and
-Filebeat identities at runtime, never placing private keys in the Nix store.
-Externally managed certificates remain supported.
+Certificate and credential provisioning can be delegated to the flake for
+standalone central stacks. It generates a persistent local CA, service
+identities, and passwords at runtime, never placing private keys or passwords
+in the Nix store. Externally managed certificates and credentials remain
+supported.
 
 ## Usage
 
@@ -71,41 +72,39 @@ services.wazuh.agent = {
 };
 ```
 
-A central host can enable all four server-side services without supplying any
-certificate files. The same protected runtime environment file can be shared
-by the manager, Filebeat, and dashboard:
+A central host can enable all four server-side services without supplying
+certificate files or internal service credentials. It only needs a managed
+dashboard-administrator password:
 
 ```nix
-let
-  credentials = "/run/agenix/wazuh-credentials";
-in {
+{
   services.wazuh = {
     certificates.autoProvision = {
       enable = true;
       indexer.subjectAltNames = [ "DNS:wazuh.example" "IP:10.0.0.10" ];
     };
+    credentials.autoProvision = {
+      enable = true;
+      indexerPasswordFile = "/run/agenix/wazuh-dashboard-admin-password";
+    };
 
     manager = {
       enable = true;
-      environmentFile = credentials;
     };
 
     filebeat = {
       enable = true;
-      environmentFile = credentials;
     };
 
     indexer = {
       enable = true;
       securityBootstrap = {
         enable = true;
-        environmentFile = credentials;
       };
     };
 
     dashboard = {
       enable = true;
-      environmentFile = credentials;
     };
   };
 }
@@ -124,30 +123,25 @@ externally trusted endpoint, or coordinated certificate rotation, leave
 `services.wazuh.certificates.autoProvision.enable` disabled and use the
 existing per-component `certificates` options.
 
-The environment file must contain these shell-style assignments:
+Automatic credential provisioning fixes the interactive dashboard username to
+`admin`, reads its password from `indexerPasswordFile`, and generates the three
+internal service passwords. Generated state is stored in
+`/var/lib/wazuh-credentials`, owned by `root:root` with mode `0700`. The module
+combines it with the dashboard administrator password in a root-only runtime
+environment file consumed by the manager, indexer bootstrap, Filebeat, and
+dashboard. Generated passwords are created once and never rotated implicitly.
 
-```bash
-INDEXER_USERNAME=admin
-INDEXER_PASSWORD=replace-me
-DASHBOARD_USERNAME=kibanaserver
-DASHBOARD_PASSWORD=replace-me
-API_USERNAME=wazuh-wui
-API_PASSWORD=Replace-This1!
-API_ADMIN_USERNAME=wazuh
-API_ADMIN_PASSWORD=Replace-Admin1!
-```
+`indexerPasswordFile` must contain exactly one non-whitespace password line;
+an agenix secret is a suitable source. For a headless deployment with no human
+dashboard login, set `generateIndexerPassword = true` instead. That password is
+then generated and persisted alongside the internal credentials.
 
-`API_USERNAME` must be `wazuh-wui`, and `API_ADMIN_USERNAME` must be `wazuh`.
-Both API passwords must be different, 8-64 characters long, and contain an
-uppercase letter, a lowercase letter, a number, and a special character. These
-requirements ensure that neither upstream reserved administrator account keeps
-its default password.
-
-The environment file can be an agenix secret such as
-`config.age.secrets.wazuh-credentials.path`. Agenix decrypts it at runtime, so
-the plaintext values do not enter the Nix store. A root-owned mode of `0400` is
-sufficient because systemd reads the environment file for the preparation
-units.
+For externally managed credentials, leave
+`services.wazuh.credentials.autoProvision.enable` disabled and configure each
+component's `environmentFile`. That file must contain `INDEXER_USERNAME=admin`,
+`DASHBOARD_USERNAME=kibanaserver`, `API_USERNAME=wazuh-wui`,
+`API_ADMIN_USERNAME=wazuh`, and their passwords. The two API passwords must be
+different and meet Wazuh's password policy.
 
 To retain a customized manager configuration declaratively, keep the XML next
 to the consuming NixOS configuration and set:
@@ -257,18 +251,41 @@ The default mutable paths are:
 | Indexer | `/var/lib/wazuh-indexer`, `/etc/wazuh-indexer` | OpenSearch data and prepared runtime configuration |
 | Filebeat | `/var/lib/filebeat`, `/etc/filebeat` | Registry, keystore, and prepared runtime configuration |
 | Dashboard | `/var/lib/wazuh-dashboard`, `/etc/wazuh-dashboard` | Plugin data, keystore, and prepared runtime configuration |
+| Generated certificates | `/var/lib/wazuh-certificates` | Local CA and service identities when certificate auto-provisioning is enabled |
+| Generated credentials | `/var/lib/wazuh-credentials` | Component passwords when credential auto-provisioning is enabled |
 
-Keep the Nix configuration and the external certificate and secret sources as
-the authoritative configuration backup. If only configuration and enrollment
-identity need to survive, back up `/var/ossec/etc`; alert logs do not need to
-be retained. Back up the rest of `/var/ossec` when agent metadata and queue
-state are also required.
+Generated certificate and credential directories are deployment identity. Back
+them up together, encrypted, and off-host. In interactive deployments, also
+back up the externally managed `indexerPasswordFile`. Do not restore only one
+of these identities or delete them while retaining the OpenSearch security
+index: the saved credentials must continue to match its stored password hashes,
+and the saved certificates must remain the TLS identity used by its clients.
+
+If only manager configuration and enrollment identity need to survive, back up
+`/var/ossec/etc`; alert logs do not need to be retained. Back up the rest of
+`/var/ossec` when agent metadata and queue state are also required.
 
 Indexer alert data does not need to be backed up when event retention is not a
 requirement. If it is retained, use an OpenSearch snapshot or a storage
 snapshot taken while the indexer is stopped; do not file-copy a live data
 directory. Filebeat and dashboard state can be reconstructed from the module,
 runtime credentials, and certificates.
+
+### Recovery sequence
+
+To restore a deployment, keep Wazuh services stopped on a fresh host and
+restore the generated certificate and credential directories together with
+their root ownership and modes. In interactive deployments, make the saved
+dashboard administrator password available again through `indexerPasswordFile`.
+Restore `/var/ossec/etc` when enrolled agents must reconnect without enrollment,
+then restore an OpenSearch snapshot when alert history or the security index
+must be preserved. Enable and start Wazuh only after those restores; the
+provisioning services see the complete existing state and leave it unchanged.
+
+For an intentional clean deployment, restore none of those directories and do
+not restore the OpenSearch snapshot. New identities and credentials will be
+generated, the security bootstrap will initialize a new index, and agents must
+enroll again.
 
 ### Credential and certificate rotation
 
@@ -292,10 +309,11 @@ sudo systemctl restart wazuh-dashboard.service
 ```
 
 The manager preparation step runs on every manager start. Automatic
-provisioning deliberately never rotates an existing CA or service identity;
-replace its persisted state only as a coordinated maintenance operation. For
-externally managed certificates, replace all related secret files first, then
-rerun the corresponding prepare unit before restarting each service. Rerun
+provisioning deliberately never rotates an existing CA, service identity, or
+password; replace its persisted certificate and credential state only as a
+coordinated maintenance operation. For externally managed certificates and
+credentials, replace all related secret files first, then rerun the
+corresponding prepare unit before restarting each service. Rerun
 `wazuh-indexer-prepare.service` before restarting the indexer. Rotate a root CA
 and all certificates issued by it as one coordinated maintenance operation.
 

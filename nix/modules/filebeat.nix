@@ -9,6 +9,7 @@ let
   wazuhCfg = config.services.wazuh;
   cfg = wazuhCfg.filebeat;
   certificateCfg = wazuhCfg.certificates.autoProvision;
+  credentialCfg = wazuhCfg.credentials.autoProvision;
   effectiveCertificates = {
     rootCA =
       if cfg.certificates.rootCA != null then
@@ -150,8 +151,12 @@ in
           "wazuh-filebeat.service"
         ]
         ++ lib.optional wazuhCfg.manager.enable "wazuh-manager.service";
-        requires = lib.optional certificateCfg.enable "wazuh-certificates.service";
-        after = lib.optional certificateCfg.enable "wazuh-certificates.service";
+        requires =
+          lib.optional certificateCfg.enable "wazuh-certificates.service"
+          ++ lib.optional credentialCfg.enable "wazuh-credentials.service";
+        after =
+          lib.optional certificateCfg.enable "wazuh-certificates.service"
+          ++ lib.optional credentialCfg.enable "wazuh-credentials.service";
         serviceConfig = {
           Type = "oneshot";
           RemainAfterExit = true;

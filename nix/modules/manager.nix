@@ -8,6 +8,7 @@
 let
   wazuhCfg = config.services.wazuh;
   cfg = wazuhCfg.manager;
+  credentialCfg = wazuhCfg.credentials.autoProvision;
   packages = import ../packages.nix {
     inherit pkgs;
     version = wazuhCfg.version;
@@ -167,6 +168,8 @@ in
       systemd.services.wazuh-manager-prepare = {
         description = "Prepare Wazuh manager runtime files and credentials";
         before = [ "wazuh-manager.service" ];
+        requires = lib.optional credentialCfg.enable "wazuh-credentials.service";
+        after = lib.optional credentialCfg.enable "wazuh-credentials.service";
         path = [
           pkgs.coreutils
           pkgs.gawk

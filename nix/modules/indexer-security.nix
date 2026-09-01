@@ -8,6 +8,7 @@
 let
   cfg = config.services.wazuh.indexer;
   certificateCfg = config.services.wazuh.certificates.autoProvision;
+  credentialCfg = config.services.wazuh.credentials.autoProvision;
   bootstrapCfg = cfg.securityBootstrap;
   indexerHealthHost =
     if cfg.bindAddress == "0.0.0.0" then
@@ -84,8 +85,12 @@ in
         requires = [
           "wazuh-indexer.service"
           "wazuh-indexer-prepare.service"
-        ];
-        after = [ "wazuh-indexer.service" ];
+        ]
+        ++ lib.optional credentialCfg.enable "wazuh-credentials.service";
+        after = [
+          "wazuh-indexer.service"
+        ]
+        ++ lib.optional credentialCfg.enable "wazuh-credentials.service";
         serviceConfig = {
           Type = "oneshot";
           RemainAfterExit = true;

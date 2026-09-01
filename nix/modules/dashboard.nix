@@ -9,6 +9,7 @@ let
   wazuhCfg = config.services.wazuh;
   cfg = wazuhCfg.dashboard;
   certificateCfg = wazuhCfg.certificates.autoProvision;
+  credentialCfg = wazuhCfg.credentials.autoProvision;
   effectiveRootCA =
     if cfg.certificates.rootCA != null then
       cfg.certificates.rootCA
@@ -189,8 +190,12 @@ in
         description = "Prepare Wazuh dashboard runtime files";
         wantedBy = [ "multi-user.target" ];
         before = [ "wazuh-dashboard.service" ];
-        requires = lib.optional certificateCfg.enable "wazuh-certificates.service";
-        after = lib.optional certificateCfg.enable "wazuh-certificates.service";
+        requires =
+          lib.optional certificateCfg.enable "wazuh-certificates.service"
+          ++ lib.optional credentialCfg.enable "wazuh-credentials.service";
+        after =
+          lib.optional certificateCfg.enable "wazuh-certificates.service"
+          ++ lib.optional credentialCfg.enable "wazuh-credentials.service";
         serviceConfig = {
           Type = "oneshot";
           RemainAfterExit = true;

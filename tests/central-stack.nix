@@ -1,16 +1,7 @@
 { pkgs }:
 
 let
-  credentials = pkgs.writeText "wazuh-central-test-credentials" ''
-    INDEXER_USERNAME=admin
-    INDEXER_PASSWORD=native-indexer-test
-    DASHBOARD_USERNAME=kibanaserver
-    DASHBOARD_PASSWORD=native-dashboard-test
-    API_USERNAME=wazuh-wui
-    API_PASSWORD=Native-Api-Test1!
-    API_ADMIN_USERNAME=wazuh
-    API_ADMIN_PASSWORD=Native-Api-Admin1!
-  '';
+  indexerPasswordFile = pkgs.writeText "wazuh-test-indexer-password" "Native-Indexer-Test1!\n";
 in
 pkgs.testers.nixosTest {
   name = "wazuh-central-stack";
@@ -29,28 +20,28 @@ pkgs.testers.nixosTest {
 
       services.wazuh = {
         certificates.autoProvision.enable = true;
+        credentials.autoProvision = {
+          enable = true;
+          inherit indexerPasswordFile;
+        };
 
         manager = {
           enable = true;
-          environmentFile = credentials;
         };
 
         filebeat = {
           enable = true;
-          environmentFile = credentials;
         };
 
         indexer = {
           enable = true;
           securityBootstrap = {
             enable = true;
-            environmentFile = credentials;
           };
         };
 
         dashboard = {
           enable = true;
-          environmentFile = credentials;
         };
       };
 
@@ -67,11 +58,19 @@ pkgs.testers.nixosTest {
 
     central.wait_for_unit("wazuh-indexer-security.service", timeout=service_timeout)
     central.wait_for_unit("wazuh-certificates.service", timeout=service_timeout)
+    central.wait_for_unit("wazuh-credentials.service", timeout=service_timeout)
     central.succeed("test -s /var/lib/wazuh-certificates/root-ca.pem")
     central.succeed("test -s /var/lib/wazuh-certificates/indexer.pem")
     central.succeed("test -s /var/lib/wazuh-certificates/admin.pem")
     central.succeed("test -s /var/lib/wazuh-certificates/filebeat.pem")
     central.succeed("stat -c '%U:%G:%a' /var/lib/wazuh-certificates | grep -qx root:root:700")
+    central.succeed("stat -c '%U:%G:%a' /var/lib/wazuh-credentials | grep -qx root:root:700")
+    central.succeed("stat -c '%U:%G:%a' /var/lib/wazuh-credentials/internal.env | grep -qx root:root:600")
+    central.succeed("stat -c '%U:%G:%a' /run/wazuh-credentials/credentials.env | grep -qx root:root:400")
+    central.succeed(". /run/wazuh-credentials/credentials.env; test \"$INDEXER_USERNAME\" = admin; test \"$INDEXER_PASSWORD\" = Native-Indexer-Test1!; test \"$DASHBOARD_USERNAME\" = kibanaserver; test \"$API_USERNAME\" = wazuh-wui; test \"$API_ADMIN_USERNAME\" = wazuh; test \"$API_PASSWORD\" != \"$API_ADMIN_PASSWORD\"")
+    central.succeed("sha256sum /var/lib/wazuh-credentials/internal.env > /tmp/wazuh-credentials.before")
+    central.succeed("systemctl restart wazuh-credentials.service")
+    central.succeed("sha256sum --check /tmp/wazuh-credentials.before")
     central.wait_for_unit("wazuh-manager.service", timeout=service_timeout)
     central.wait_until_succeeds(
         "test \"$(systemctl show wazuh-manager-api-credentials.service -p ActiveState --value)\" = inactive; "
@@ -80,7 +79,7 @@ pkgs.testers.nixosTest {
     )
     central.wait_for_unit("wazuh-filebeat.service", timeout=service_timeout)
     central.succeed(
-        "curl --fail --silent --cacert /var/lib/wazuh-certificates/root-ca.pem --user admin:native-indexer-test "
+        ". /run/wazuh-credentials/credentials.env; curl --fail --silent --cacert /var/lib/wazuh-certificates/root-ca.pem --user \"$INDEXER_USERNAME:$INDEXER_PASSWORD\" "
         "'https://127.0.0.1:9200/_cluster/health?wait_for_status=green&"
         "wait_for_no_relocating_shards=true&wait_for_no_initializing_shards=true&timeout=180s'"
     )
@@ -88,15 +87,15 @@ pkgs.testers.nixosTest {
     central.wait_for_unit("wazuh-dashboard.service", timeout=service_timeout)
 
     central.succeed(
-        "curl --fail --silent --cacert /var/lib/wazuh-certificates/root-ca.pem "
-        "--user admin:native-indexer-test https://127.0.0.1:9200/_cluster/health"
+        ". /run/wazuh-credentials/credentials.env; curl --fail --silent --cacert /var/lib/wazuh-certificates/root-ca.pem "
+        "--user \"$INDEXER_USERNAME:$INDEXER_PASSWORD\" https://127.0.0.1:9200/_cluster/health"
     )
     central.succeed(
-        "curl --fail --silent --insecure --user 'wazuh-wui:Native-Api-Test1!' "
+        ". /run/wazuh-credentials/credentials.env; curl --fail --silent --insecure --user \"$API_USERNAME:$API_PASSWORD\" "
         "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q ."
     )
     central.succeed(
-        "curl --fail --silent --insecure --user 'wazuh:Native-Api-Admin1!' "
+        ". /run/wazuh-credentials/credentials.env; curl --fail --silent --insecure --user \"$API_ADMIN_USERNAME:$API_ADMIN_PASSWORD\" "
         "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q ."
     )
     central.fail(
@@ -114,13 +113,14 @@ pkgs.testers.nixosTest {
     central.succeed("grep -qxF 'server.ssl.enabled: false' /etc/wazuh-dashboard/opensearch_dashboards.yml")
     central.succeed("! grep -q '^server.ssl.\\(certificate\\|key\\):' /etc/wazuh-dashboard/opensearch_dashboards.yml")
     central.succeed(
-        "${pkgs.jq}/bin/jq -e "
+        ". /run/wazuh-credentials/credentials.env; ${pkgs.jq}/bin/jq "
+        "--arg password \"$API_PASSWORD\" -e "
         "'.hosts[0][\"1513629884013\"] | "
-        ".url == \"https://127.0.0.1\" and .password == \"Native-Api-Test1!\"' "
+        ".url == \"https://127.0.0.1\" and .password == $password' "
         "/var/lib/wazuh-dashboard/wazuh/config/wazuh.yml"
     )
     central.wait_until_succeeds(
-        "curl --fail --silent --user admin:native-indexer-test "
+        ". /run/wazuh-credentials/credentials.env; curl --fail --silent --user \"$INDEXER_USERNAME:$INDEXER_PASSWORD\" "
         "http://127.0.0.1:5601/api/status >/dev/null",
         timeout=poll_timeout,
     )
@@ -131,7 +131,7 @@ pkgs.testers.nixosTest {
         ">> /var/ossec/logs/alerts/alerts.json"
     )
     central.wait_until_succeeds(
-        "curl --fail --silent --cacert /var/lib/wazuh-certificates/root-ca.pem --user admin:native-indexer-test "
+        ". /run/wazuh-credentials/credentials.env; curl --fail --silent --cacert /var/lib/wazuh-certificates/root-ca.pem --user \"$INDEXER_USERNAME:$INDEXER_PASSWORD\" "
         "'https://127.0.0.1:9200/_cat/indices/wazuh-alerts-4.x-*?h=index' | grep -q wazuh-alerts-4.x-",
         timeout=poll_timeout,
     )
@@ -139,7 +139,7 @@ pkgs.testers.nixosTest {
     central.succeed("systemctl restart wazuh-dashboard.service")
     central.wait_for_unit("wazuh-dashboard.service", timeout=service_timeout)
     central.wait_until_succeeds(
-        "curl --fail --silent --user admin:native-indexer-test "
+        ". /run/wazuh-credentials/credentials.env; curl --fail --silent --user \"$INDEXER_USERNAME:$INDEXER_PASSWORD\" "
         "http://127.0.0.1:5601/api/status >/dev/null",
         timeout=poll_timeout,
     )
@@ -151,17 +151,17 @@ pkgs.testers.nixosTest {
     central.wait_for_unit("wazuh-filebeat.service", timeout=service_timeout)
     central.wait_for_unit("wazuh-dashboard.service", timeout=service_timeout)
     central.wait_until_succeeds(
-        "curl --fail --silent --insecure --user 'wazuh-wui:Native-Api-Test1!' "
+        ". /run/wazuh-credentials/credentials.env; curl --fail --silent --insecure --user \"$API_USERNAME:$API_PASSWORD\" "
         "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q .",
         timeout=poll_timeout,
     )
     central.wait_until_succeeds(
-        "curl --fail --silent --insecure --user 'wazuh:Native-Api-Admin1!' "
+        ". /run/wazuh-credentials/credentials.env; curl --fail --silent --insecure --user \"$API_ADMIN_USERNAME:$API_ADMIN_PASSWORD\" "
         "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q .",
         timeout=poll_timeout,
     )
     central.wait_until_succeeds(
-        "curl --fail --silent --user admin:native-indexer-test "
+        ". /run/wazuh-credentials/credentials.env; curl --fail --silent --user \"$INDEXER_USERNAME:$INDEXER_PASSWORD\" "
         "http://127.0.0.1:5601/api/status >/dev/null",
         timeout=poll_timeout,
     )
@@ -173,23 +173,23 @@ pkgs.testers.nixosTest {
     central.wait_for_unit("wazuh-filebeat.service", timeout=service_timeout)
     central.wait_for_unit("wazuh-dashboard.service", timeout=service_timeout)
     central.wait_until_succeeds(
-        "curl --fail --silent --cacert ${certificates}/root-ca.pem --user admin:native-indexer-test "
+        ". /run/wazuh-credentials/credentials.env; curl --fail --silent --cacert /var/lib/wazuh-certificates/root-ca.pem --user \"$INDEXER_USERNAME:$INDEXER_PASSWORD\" "
         "'https://127.0.0.1:9200/_cluster/health?wait_for_status=green&"
         "wait_for_no_relocating_shards=true&wait_for_no_initializing_shards=true&timeout=180s' >/dev/null",
         timeout=service_timeout,
     )
     central.wait_until_succeeds(
-        "curl --fail --silent --insecure --user 'wazuh-wui:Native-Api-Test1!' "
+        ". /run/wazuh-credentials/credentials.env; curl --fail --silent --insecure --user \"$API_USERNAME:$API_PASSWORD\" "
         "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q .",
         timeout=poll_timeout,
     )
     central.wait_until_succeeds(
-        "curl --fail --silent --insecure --user 'wazuh:Native-Api-Admin1!' "
+        ". /run/wazuh-credentials/credentials.env; curl --fail --silent --insecure --user \"$API_ADMIN_USERNAME:$API_ADMIN_PASSWORD\" "
         "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q .",
         timeout=poll_timeout,
     )
     central.wait_until_succeeds(
-        "curl --fail --silent --user admin:native-indexer-test "
+        ". /run/wazuh-credentials/credentials.env; curl --fail --silent --user \"$INDEXER_USERNAME:$INDEXER_PASSWORD\" "
         "http://127.0.0.1:5601/api/status >/dev/null",
         timeout=poll_timeout,
     )
@@ -200,7 +200,7 @@ pkgs.testers.nixosTest {
         ">> /var/ossec/logs/alerts/alerts.json"
     )
     central.wait_until_succeeds(
-        "curl --fail --silent --cacert ${certificates}/root-ca.pem --user admin:native-indexer-test "
+        ". /run/wazuh-credentials/credentials.env; curl --fail --silent --cacert /var/lib/wazuh-certificates/root-ca.pem --user \"$INDEXER_USERNAME:$INDEXER_PASSWORD\" "
         "--header 'Content-Type: application/json' "
         "--data '{\"query\":{\"match_phrase\":{\"full_log\":\"native-central-stack-restart-test\"}}}' "
         "'https://127.0.0.1:9200/wazuh-alerts-4.x-*/_count' | "

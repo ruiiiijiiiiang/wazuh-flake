@@ -2,6 +2,7 @@
   imports = [
     ./common.nix
     ./certificates.nix
+    ./credentials.nix
     ./agent.nix
     ./manager.nix
     ./manager-api-credentials.nix

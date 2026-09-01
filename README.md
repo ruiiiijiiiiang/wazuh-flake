@@ -151,10 +151,32 @@ then generated and persisted alongside the internal credentials.
 
 For externally managed credentials, leave
 `services.wazuh.credentials.autoProvision.enable` disabled and configure each
-component's `environmentFile`. That file must contain `INDEXER_USERNAME=admin`,
-`DASHBOARD_USERNAME=kibanaserver`, `API_USERNAME=wazuh-wui`,
-`API_ADMIN_USERNAME=wazuh`, and their passwords. The two API passwords must be
-different and meet Wazuh's password policy.
+component's `environmentFile`. "Their passwords" means a password for each of
+these four fixed Wazuh accounts:
+
+| Account | Environment variables | Used by |
+| --- | --- | --- |
+| `admin` | `INDEXER_USERNAME=admin`, `INDEXER_PASSWORD` | A person logging in to the dashboard and the initial security bootstrap |
+| `kibanaserver` | `DASHBOARD_USERNAME=kibanaserver`, `DASHBOARD_PASSWORD` | The dashboard's technical connection to the indexer; this is not a dashboard login |
+| `wazuh-wui` | `API_USERNAME=wazuh-wui`, `API_PASSWORD` | The dashboard's technical connection to the Wazuh manager API |
+| `wazuh` | `API_ADMIN_USERNAME=wazuh`, `API_ADMIN_PASSWORD` | Manager API-user provisioning |
+
+For example, the root-readable runtime file must define all eight variables:
+
+```text
+INDEXER_USERNAME=admin
+INDEXER_PASSWORD=replace-with-the-dashboard-login-password
+DASHBOARD_USERNAME=kibanaserver
+DASHBOARD_PASSWORD=replace-with-the-dashboard-service-password
+API_USERNAME=wazuh-wui
+API_PASSWORD=replace-with-the-dashboard-api-password
+API_ADMIN_USERNAME=wazuh
+API_ADMIN_PASSWORD=replace-with-the-manager-api-password
+```
+
+The two API passwords must differ and satisfy Wazuh's password policy. Keep the
+file out of the Nix store—for example, supply an agenix-decrypted secret—and
+set each enabled component's `environmentFile` to its runtime path.
 
 To retain a customized manager configuration declaratively, keep the XML next
 to the consuming NixOS configuration and set:

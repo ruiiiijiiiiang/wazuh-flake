@@ -8,6 +8,24 @@
 let
   wazuhCfg = config.services.wazuh;
   cfg = wazuhCfg.filebeat;
+  certificateCfg = wazuhCfg.certificates.autoProvision;
+  effectiveCertificates = {
+    rootCA =
+      if cfg.certificates.rootCA != null then
+        cfg.certificates.rootCA
+      else
+        "${certificateCfg.stateDir}/root-ca.pem";
+    certificate =
+      if cfg.certificates.certificate != null then
+        cfg.certificates.certificate
+      else
+        "${certificateCfg.stateDir}/filebeat.pem";
+    key =
+      if cfg.certificates.key != null then
+        cfg.certificates.key
+      else
+        "${certificateCfg.stateDir}/filebeat-key.pem";
+  };
   packages = import ../packages.nix {
     inherit pkgs;
     version = wazuhCfg.version;
@@ -107,9 +125,12 @@ in
           assertion =
             !cfg.enable
             || (
-              cfg.certificates.rootCA != null
-              && cfg.certificates.certificate != null
-              && cfg.certificates.key != null
+              certificateCfg.enable
+              || (
+                cfg.certificates.rootCA != null
+                && cfg.certificates.certificate != null
+                && cfg.certificates.key != null
+              )
             );
           message = "Wazuh Filebeat requires its root CA, certificate, and key.";
         }
@@ -129,6 +150,8 @@ in
           "wazuh-filebeat.service"
         ]
         ++ lib.optional wazuhCfg.manager.enable "wazuh-manager.service";
+        requires = lib.optional certificateCfg.enable "wazuh-certificates.service";
+        after = lib.optional certificateCfg.enable "wazuh-certificates.service";
         serviceConfig = {
           Type = "oneshot";
           RemainAfterExit = true;
@@ -146,13 +169,13 @@ in
               ${cfg.package}/etc/filebeat/wazuh-template.json \
               ${cfg.configDir}/wazuh-template.json
             install -o root -g root -m 0400 \
-              ${cfg.certificates.rootCA} \
+              ${effectiveCertificates.rootCA} \
               ${cfg.configDir}/certs/root-ca.pem
             install -o root -g root -m 0400 \
-              ${cfg.certificates.certificate} \
+              ${effectiveCertificates.certificate} \
               ${cfg.configDir}/certs/filebeat.pem
             install -o root -g root -m 0400 \
-              ${cfg.certificates.key} \
+              ${effectiveCertificates.key} \
               ${cfg.configDir}/certs/filebeat-key.pem
 
             filebeat=${cfg.package}/usr/share/filebeat/bin/filebeat

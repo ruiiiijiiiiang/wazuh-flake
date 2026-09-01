@@ -16,6 +16,18 @@
     {
       packages = forAllSystems packagesFor;
 
+      devShells = forAllSystems (
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+        in
+        {
+          default = pkgs.mkShell {
+            packages = [ pkgs.nixfmt ];
+          };
+        }
+      );
+
       nixosModules = {
         default = import ./nix/module.nix;
         wazuh = import ./nix/module.nix;

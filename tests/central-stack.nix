@@ -1,8 +1,6 @@
 { pkgs }:
 
 let
-  certificates = import ./certificates.nix { inherit pkgs; };
-
   credentials = pkgs.writeText "wazuh-central-test-credentials" ''
     INDEXER_USERNAME=admin
     INDEXER_PASSWORD=native-indexer-test
@@ -30,6 +28,8 @@ pkgs.testers.nixosTest {
       };
 
       services.wazuh = {
+        certificates.autoProvision.enable = true;
+
         manager = {
           enable = true;
           environmentFile = credentials;
@@ -38,22 +38,10 @@ pkgs.testers.nixosTest {
         filebeat = {
           enable = true;
           environmentFile = credentials;
-          certificates = {
-            rootCA = "${certificates}/root-ca.pem";
-            certificate = "${certificates}/filebeat.pem";
-            key = "${certificates}/filebeat-key.pem";
-          };
         };
 
         indexer = {
           enable = true;
-          certificates = {
-            rootCA = "${certificates}/root-ca.pem";
-            nodeCertificate = "${certificates}/node-1.pem";
-            nodeKey = "${certificates}/node-1-key.pem";
-            adminCertificate = "${certificates}/admin.pem";
-            adminKey = "${certificates}/admin-key.pem";
-          };
           securityBootstrap = {
             enable = true;
             environmentFile = credentials;
@@ -63,9 +51,6 @@ pkgs.testers.nixosTest {
         dashboard = {
           enable = true;
           environmentFile = credentials;
-          certificates = {
-            rootCA = "${certificates}/root-ca.pem";
-          };
         };
       };
 
@@ -81,6 +66,12 @@ pkgs.testers.nixosTest {
     start_all()
 
     central.wait_for_unit("wazuh-indexer-security.service", timeout=service_timeout)
+    central.wait_for_unit("wazuh-certificates.service", timeout=service_timeout)
+    central.succeed("test -s /var/lib/wazuh-certificates/root-ca.pem")
+    central.succeed("test -s /var/lib/wazuh-certificates/indexer.pem")
+    central.succeed("test -s /var/lib/wazuh-certificates/admin.pem")
+    central.succeed("test -s /var/lib/wazuh-certificates/filebeat.pem")
+    central.succeed("stat -c '%U:%G:%a' /var/lib/wazuh-certificates | grep -qx root:root:700")
     central.wait_for_unit("wazuh-manager.service", timeout=service_timeout)
     central.wait_until_succeeds(
         "test \"$(systemctl show wazuh-manager-api-credentials.service -p ActiveState --value)\" = inactive; "
@@ -89,7 +80,7 @@ pkgs.testers.nixosTest {
     )
     central.wait_for_unit("wazuh-filebeat.service", timeout=service_timeout)
     central.succeed(
-        "curl --fail --silent --cacert ${certificates}/root-ca.pem --user admin:native-indexer-test "
+        "curl --fail --silent --cacert /var/lib/wazuh-certificates/root-ca.pem --user admin:native-indexer-test "
         "'https://127.0.0.1:9200/_cluster/health?wait_for_status=green&"
         "wait_for_no_relocating_shards=true&wait_for_no_initializing_shards=true&timeout=180s'"
     )
@@ -97,7 +88,7 @@ pkgs.testers.nixosTest {
     central.wait_for_unit("wazuh-dashboard.service", timeout=service_timeout)
 
     central.succeed(
-        "curl --fail --silent --cacert ${certificates}/root-ca.pem "
+        "curl --fail --silent --cacert /var/lib/wazuh-certificates/root-ca.pem "
         "--user admin:native-indexer-test https://127.0.0.1:9200/_cluster/health"
     )
     central.succeed(
@@ -140,7 +131,7 @@ pkgs.testers.nixosTest {
         ">> /var/ossec/logs/alerts/alerts.json"
     )
     central.wait_until_succeeds(
-        "curl --fail --silent --cacert ${certificates}/root-ca.pem --user admin:native-indexer-test "
+        "curl --fail --silent --cacert /var/lib/wazuh-certificates/root-ca.pem --user admin:native-indexer-test "
         "'https://127.0.0.1:9200/_cat/indices/wazuh-alerts-4.x-*?h=index' | grep -q wazuh-alerts-4.x-",
         timeout=poll_timeout,
     )

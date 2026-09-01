@@ -7,6 +7,7 @@
 
 let
   cfg = config.services.wazuh.indexer;
+  certificateCfg = config.services.wazuh.certificates.autoProvision;
   bootstrapCfg = cfg.securityBootstrap;
   indexerHealthHost =
     if cfg.bindAddress == "0.0.0.0" then
@@ -63,11 +64,14 @@ in
           assertion =
             !bootstrapCfg.enable
             || (
-              cfg.certificates.rootCA != null
-              && cfg.certificates.nodeCertificate != null
-              && cfg.certificates.nodeKey != null
-              && cfg.certificates.adminCertificate != null
-              && cfg.certificates.adminKey != null
+              certificateCfg.enable
+              || (
+                cfg.certificates.rootCA != null
+                && cfg.certificates.nodeCertificate != null
+                && cfg.certificates.nodeKey != null
+                && cfg.certificates.adminCertificate != null
+                && cfg.certificates.adminKey != null
+              )
             );
           message = "Wazuh indexer security bootstrap requires all indexer certificates.";
         }

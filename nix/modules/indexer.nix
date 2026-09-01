@@ -8,6 +8,34 @@
 let
   wazuhCfg = config.services.wazuh;
   cfg = wazuhCfg.indexer;
+  certificateCfg = wazuhCfg.certificates.autoProvision;
+  effectiveCertificates = {
+    rootCA =
+      if cfg.certificates.rootCA != null then
+        cfg.certificates.rootCA
+      else
+        "${certificateCfg.stateDir}/root-ca.pem";
+    nodeCertificate =
+      if cfg.certificates.nodeCertificate != null then
+        cfg.certificates.nodeCertificate
+      else
+        "${certificateCfg.stateDir}/indexer.pem";
+    nodeKey =
+      if cfg.certificates.nodeKey != null then
+        cfg.certificates.nodeKey
+      else
+        "${certificateCfg.stateDir}/indexer-key.pem";
+    adminCertificate =
+      if cfg.certificates.adminCertificate != null then
+        cfg.certificates.adminCertificate
+      else
+        "${certificateCfg.stateDir}/admin.pem";
+    adminKey =
+      if cfg.certificates.adminKey != null then
+        cfg.certificates.adminKey
+      else
+        "${certificateCfg.stateDir}/admin-key.pem";
+  };
   packages = import ../packages.nix {
     inherit pkgs;
     version = wazuhCfg.version;
@@ -107,6 +135,8 @@ in
       description = "Prepare Wazuh indexer runtime files";
       wantedBy = [ "multi-user.target" ];
       before = [ "wazuh-indexer.service" ];
+      requires = lib.optional certificateCfg.enable "wazuh-certificates.service";
+      after = lib.optional certificateCfg.enable "wazuh-certificates.service";
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
@@ -117,20 +147,20 @@ in
             cp -a --no-clobber ${cfg.package}/etc/wazuh-indexer/. ${cfg.configDir}/
           fi
           install -d -m 0500 -o wazuh-indexer -g wazuh-indexer ${cfg.configDir}/certs
-          ${lib.optionalString (cfg.certificates.rootCA != null) ''
-            install -o wazuh-indexer -g wazuh-indexer -m 0400 ${cfg.certificates.rootCA} ${cfg.configDir}/certs/root-ca.pem
+          ${lib.optionalString (cfg.certificates.rootCA != null || certificateCfg.enable) ''
+            install -o wazuh-indexer -g wazuh-indexer -m 0400 ${effectiveCertificates.rootCA} ${cfg.configDir}/certs/root-ca.pem
           ''}
-          ${lib.optionalString (cfg.certificates.nodeCertificate != null) ''
-            install -o wazuh-indexer -g wazuh-indexer -m 0400 ${cfg.certificates.nodeCertificate} ${cfg.configDir}/certs/indexer.pem
+          ${lib.optionalString (cfg.certificates.nodeCertificate != null || certificateCfg.enable) ''
+            install -o wazuh-indexer -g wazuh-indexer -m 0400 ${effectiveCertificates.nodeCertificate} ${cfg.configDir}/certs/indexer.pem
           ''}
-          ${lib.optionalString (cfg.certificates.nodeKey != null) ''
-            install -o wazuh-indexer -g wazuh-indexer -m 0400 ${cfg.certificates.nodeKey} ${cfg.configDir}/certs/indexer-key.pem
+          ${lib.optionalString (cfg.certificates.nodeKey != null || certificateCfg.enable) ''
+            install -o wazuh-indexer -g wazuh-indexer -m 0400 ${effectiveCertificates.nodeKey} ${cfg.configDir}/certs/indexer-key.pem
           ''}
-          ${lib.optionalString (cfg.certificates.adminCertificate != null) ''
-            install -o wazuh-indexer -g wazuh-indexer -m 0400 ${cfg.certificates.adminCertificate} ${cfg.configDir}/certs/admin.pem
+          ${lib.optionalString (cfg.certificates.adminCertificate != null || certificateCfg.enable) ''
+            install -o wazuh-indexer -g wazuh-indexer -m 0400 ${effectiveCertificates.adminCertificate} ${cfg.configDir}/certs/admin.pem
           ''}
-          ${lib.optionalString (cfg.certificates.adminKey != null) ''
-            install -o wazuh-indexer -g wazuh-indexer -m 0400 ${cfg.certificates.adminKey} ${cfg.configDir}/certs/admin-key.pem
+          ${lib.optionalString (cfg.certificates.adminKey != null || certificateCfg.enable) ''
+            install -o wazuh-indexer -g wazuh-indexer -m 0400 ${effectiveCertificates.adminKey} ${cfg.configDir}/certs/admin-key.pem
           ''}
           ${lib.optionalString (cfg.config != "") ''
             install -o wazuh-indexer -g wazuh-indexer -m 0640 ${indexerConfigFile} ${cfg.configDir}/opensearch.yml

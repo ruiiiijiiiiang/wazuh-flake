@@ -8,6 +8,12 @@
 let
   wazuhCfg = config.services.wazuh;
   cfg = wazuhCfg.dashboard;
+  certificateCfg = wazuhCfg.certificates.autoProvision;
+  effectiveRootCA =
+    if cfg.certificates.rootCA != null then
+      cfg.certificates.rootCA
+    else
+      "${certificateCfg.stateDir}/root-ca.pem";
   packages = import ../packages.nix {
     inherit pkgs;
     version = wazuhCfg.version;
@@ -158,7 +164,7 @@ in
           message = "services.wazuh.dashboard.environmentFile is required when the dashboard is enabled.";
         }
         {
-          assertion = !cfg.enable || cfg.certificates.rootCA != null;
+          assertion = !cfg.enable || certificateCfg.enable || cfg.certificates.rootCA != null;
           message = "The Wazuh dashboard requires the indexer root CA certificate.";
         }
         {
@@ -183,6 +189,8 @@ in
         description = "Prepare Wazuh dashboard runtime files";
         wantedBy = [ "multi-user.target" ];
         before = [ "wazuh-dashboard.service" ];
+        requires = lib.optional certificateCfg.enable "wazuh-certificates.service";
+        after = lib.optional certificateCfg.enable "wazuh-certificates.service";
         serviceConfig = {
           Type = "oneshot";
           RemainAfterExit = true;
@@ -210,8 +218,8 @@ in
             chmod -R u+rwX,g+rX,o-rwx ${cfg.dataDir}
 
             install -d -m 0500 -o wazuh-dashboard -g wazuh-dashboard ${cfg.configDir}/certs
-            ${lib.optionalString (cfg.certificates.rootCA != null) ''
-              install -o wazuh-dashboard -g wazuh-dashboard -m 0400 ${cfg.certificates.rootCA} ${cfg.configDir}/certs/root-ca.pem
+            ${lib.optionalString (cfg.certificates.rootCA != null || certificateCfg.enable) ''
+              install -o wazuh-dashboard -g wazuh-dashboard -m 0400 ${effectiveRootCA} ${cfg.configDir}/certs/root-ca.pem
             ''}
             ${lib.optionalString dashboardTlsEnabled ''
               install -o wazuh-dashboard -g wazuh-dashboard -m 0400 ${cfg.certificates.certificate} ${cfg.configDir}/certs/dashboard.pem

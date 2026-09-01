@@ -36,10 +36,10 @@ authenticates with the provisioned credentials, starts the dashboard, forwards
 an alert through Filebeat, verifies the resulting index, restarts every central
 service, and verifies API and alert-pipeline recovery afterward.
 
-Certificate generation and existing state migration remain outside this
-flake's scope. The module installs supplied certificates and provisions
-component keystores from a runtime environment file without placing passwords
-in the Nix store.
+Certificate provisioning can be delegated to the flake for standalone central
+stacks. It generates a persistent local CA plus indexer, security-admin, and
+Filebeat identities at runtime, never placing private keys in the Nix store.
+Externally managed certificates remain supported.
 
 ## Usage
 
@@ -71,17 +71,20 @@ services.wazuh.agent = {
 };
 ```
 
-A central host enables all four server-side services and supplies the
-certificates generated for its Wazuh deployment. The same protected runtime
-environment file can be shared by the manager, Filebeat, and dashboard:
+A central host can enable all four server-side services without supplying any
+certificate files. The same protected runtime environment file can be shared
+by the manager, Filebeat, and dashboard:
 
 ```nix
 let
   credentials = "/run/agenix/wazuh-credentials";
-  rootCA = "/run/agenix/wazuh-root-ca";
-in
-{
+in {
   services.wazuh = {
+    certificates.autoProvision = {
+      enable = true;
+      indexer.subjectAltNames = [ "DNS:wazuh.example" "IP:10.0.0.10" ];
+    };
+
     manager = {
       enable = true;
       environmentFile = credentials;
@@ -90,22 +93,10 @@ in
     filebeat = {
       enable = true;
       environmentFile = credentials;
-      certificates = {
-        inherit rootCA;
-        certificate = "/run/agenix/wazuh-filebeat-cert";
-        key = "/run/agenix/wazuh-filebeat-key";
-      };
     };
 
     indexer = {
       enable = true;
-      certificates = {
-        inherit rootCA;
-        nodeCertificate = "/run/agenix/wazuh-indexer-cert";
-        nodeKey = "/run/agenix/wazuh-indexer-key";
-        adminCertificate = "/run/agenix/wazuh-admin-cert";
-        adminKey = "/run/agenix/wazuh-admin-key";
-      };
       securityBootstrap = {
         enable = true;
         environmentFile = credentials;
@@ -115,9 +106,6 @@ in
     dashboard = {
       enable = true;
       environmentFile = credentials;
-      certificates = {
-        inherit rootCA;
-      };
     };
   };
 }
@@ -127,6 +115,14 @@ With no dashboard certificate and key, the dashboard serves HTTP on its
 localhost bind address for a local TLS-terminating reverse proxy. Set both
 `services.wazuh.dashboard.certificates.certificate` and `key` to enable HTTPS
 directly on the dashboard listener.
+
+Automatic provisioning is intended for a standalone indexer. Its state is
+stored in `/var/lib/wazuh-certificates` with mode `0700`; back up this directory
+to preserve the deployment's TLS identity. Changing the generated indexer
+certificate SANs after first boot does not rotate it. For a multi-node cluster,
+externally trusted endpoint, or coordinated certificate rotation, leave
+`services.wazuh.certificates.autoProvision.enable` disabled and use the
+existing per-component `certificates` options.
 
 The environment file must contain these shell-style assignments:
 
@@ -295,9 +291,11 @@ sudo systemctl restart wazuh-dashboard-prepare.service
 sudo systemctl restart wazuh-dashboard.service
 ```
 
-The manager preparation step runs on every manager start. For certificate
-rotation, replace all related secret files first, then rerun the corresponding
-prepare unit before restarting each service. Rerun
+The manager preparation step runs on every manager start. Automatic
+provisioning deliberately never rotates an existing CA or service identity;
+replace its persisted state only as a coordinated maintenance operation. For
+externally managed certificates, replace all related secret files first, then
+rerun the corresponding prepare unit before restarting each service. Rerun
 `wazuh-indexer-prepare.service` before restarting the indexer. Rotate a root CA
 and all certificates issued by it as one coordinated maintenance operation.
 

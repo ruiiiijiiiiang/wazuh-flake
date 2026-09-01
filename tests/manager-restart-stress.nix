@@ -18,6 +18,12 @@ pkgs.testers.nixosTest {
         requireIndexer = false;
         config = builtins.readFile ./manager-standalone-ossec.conf;
       };
+
+      systemd.services.wazuh-manager.serviceConfig.ExecStartPre =
+        pkgs.writeShellScript "truncate-wazuh-manager-log"
+          /* bash */ ''
+            : > /var/ossec/logs/ossec.log
+          '';
     };
 
   testScript = ''

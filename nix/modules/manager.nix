@@ -53,11 +53,22 @@ let
     set -eu
 
     log_file=/var/ossec/logs/ossec.log
-    log_offset=$(cat /run/wazuh-manager-log-offset)
+    read -r log_offset fingerprint_size log_fingerprint < /run/wazuh-manager-log-state
     remaining=300
 
     while [ "$remaining" -gt 0 ]; do
       if [ -f "$log_file" ]; then
+        current_size=$(stat -c %s "$log_file")
+        if [ "$current_size" -lt "$log_offset" ]; then
+          log_offset=0
+        elif [ "$fingerprint_size" -gt 0 ]; then
+          fingerprint_offset=$((log_offset - fingerprint_size))
+          current_fingerprint=$(dd if="$log_file" bs=1 skip="$fingerprint_offset" count="$fingerprint_size" status=none | sha256sum | awk '{print $1}')
+          if [ "$current_fingerprint" != "$log_fingerprint" ]; then
+            log_offset=0
+          fi
+        fi
+
         if tail -c "+$((log_offset + 1))" "$log_file" \
           | grep -Fq 'InventoryHarvesterFacade module started.'; then
           exit 0
@@ -247,12 +258,20 @@ in
             printf '%s\n' "${cfg.package}" > "$package_marker"
             chown root:wazuh "$package_marker"
             chmod 0640 "$package_marker"
-            if [ -f /var/ossec/logs/ossec.log ]; then
-              stat -c %s /var/ossec/logs/ossec.log > /run/wazuh-manager-log-offset
-            else
-              printf '0\n' > /run/wazuh-manager-log-offset
+            log_file=/var/ossec/logs/ossec.log
+            log_offset=0
+            fingerprint_size=0
+            log_fingerprint=-
+            if [ -f "$log_file" ]; then
+              log_offset=$(stat -c %s "$log_file")
+              if [ "$log_offset" -gt 0 ]; then
+                fingerprint_size=$((log_offset < 4096 ? log_offset : 4096))
+                fingerprint_offset=$((log_offset - fingerprint_size))
+                log_fingerprint=$(dd if="$log_file" bs=1 skip="$fingerprint_offset" count="$fingerprint_size" status=none | sha256sum | awk '{print $1}')
+              fi
             fi
-            chmod 0600 /run/wazuh-manager-log-offset
+            printf '%s %s %s\n' "$log_offset" "$fingerprint_size" "$log_fingerprint" > /run/wazuh-manager-log-state
+            chmod 0600 /run/wazuh-manager-log-state
           '';
         };
       };

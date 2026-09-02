@@ -1,0 +1,26 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "enabledManagers": ["custom.regex"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^nix\\/release\\.nix$/"],
+      "matchStrings": [
+        "version\\s*=\\s*\"(?<currentValue>[^\"]+)\";"
+      ],
+      "depNameTemplate": "Wazuh",
+      "packageNameTemplate": "wazuh/wazuh",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.*)$",
+      "versioningTemplate": "semver"
+    }
+  ],
+  "dependencyDashboard": true,
+  "packageRules": [
+    {
+      "matchPackageNames": ["wazuh/wazuh"],
+      "dependencyDashboardApproval": true
+    }
+  ]
+}

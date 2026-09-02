@@ -2,6 +2,7 @@
   config,
   lib,
   pkgs,
+  wazuhPackages,
   ...
 }:
 
@@ -15,10 +16,6 @@ let
       cfg.certificates.rootCA
     else
       "${certificateCfg.stateDir}/root-ca.pem";
-  packages = import ../packages.nix {
-    inherit pkgs;
-    version = wazuhCfg.version;
-  };
   dashboardTlsEnabled = cfg.certificates.certificate != null && cfg.certificates.key != null;
   dashboardConfig =
     if cfg.config != "" then
@@ -46,7 +43,7 @@ let
             server.ssl.key: "${cfg.configDir}/certs/dashboard-key.pem"
           '')
         ]
-        (lib.readFile ../opensearch_dashboards.yml);
+        (lib.readFile ../templates/opensearch_dashboards.yml);
   dashboardConfigFile = pkgs.writeText "opensearch_dashboards.yml" dashboardConfig;
   dashboardAppSettingsFile = pkgs.writeText "wazuh-dashboard-app-settings.json" (
     builtins.toJSON cfg.appSettings
@@ -57,7 +54,7 @@ in
     enable = lib.mkEnableOption "Wazuh dashboard";
     package = lib.mkOption {
       type = lib.types.package;
-      default = packages.dashboard;
+      default = wazuhPackages.dashboard;
     };
     configDir = lib.mkOption {
       type = lib.types.path;

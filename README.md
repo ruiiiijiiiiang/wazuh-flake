@@ -9,13 +9,12 @@ projects from source.
 
 ## Status
 
-The package URLs and hashes are pinned to Wazuh 4.14.7 for x86_64-linux and
-aarch64-linux. All central components are kept at the same patch version, and
-the release hashes are centralized near the top of `nix/packages.nix`.
-Wazuh 4.14.7 includes the
-[vulnerability-scanner shutdown fix](https://github.com/wazuh/wazuh/pull/36011)
-first released in 4.14.6; 4.14.5 is not supported by this flake because its
-manager can crash while stopping a disabled or partially initialized scanner.
+The package URLs and hashes are pinned by `nix/release.nix` for x86_64-linux
+and aarch64-linux. All central components are kept at the same patch version.
+The packaged release includes the
+[vulnerability-scanner shutdown fix](https://github.com/wazuh/wazuh/pull/36011);
+releases lacking that fix are not supported because their manager can crash
+while stopping a disabled or partially initialized scanner.
 
 The Debian maintainer scripts are intentionally not executed. The modules
 reproduce the required setup, including permissions and the manager enrollment
@@ -268,13 +267,13 @@ disk. That is a test fixture, not a production sizing recommendation. Monitor
 indexer heap pressure and disk use and size the host for its actual agent and
 retention load.
 
-Wazuh 4.14.7's `wazuh-modulesd` aborts in its inventory teardown path when the
-indexer integration is enabled. For that configuration, this module kills only
-`wazuh-modulesd` before asking `wazuh-control` to stop the remaining daemons;
-standalone managers keep the normal graceful stop path. The central-stack test
-guards against the resulting segfault and core dump. Reassess and remove this
-workaround when upgrading Wazuh after the same test demonstrates that upstream
-shutdown is safe.
+The packaged release's `wazuh-modulesd` aborts in its inventory teardown path
+when the indexer integration is enabled. For that configuration, this module
+kills only `wazuh-modulesd` before asking `wazuh-control` to stop the remaining
+daemons; standalone managers keep the normal graceful stop path. The
+central-stack test guards against the resulting segfault and core dump.
+Reassess and remove this workaround when upgrading Wazuh after the same test
+demonstrates that upstream shutdown is safe.
 
 ### Persistent state and backups
 

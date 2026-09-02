@@ -7,7 +7,7 @@ pkgs.testers.nixosTest {
     agent =
       { ... }:
       {
-        imports = [ ../nix/module.nix ];
+        imports = [ ../nix/modules ];
 
         services.wazuh.agent = {
           enable = true;
@@ -24,14 +24,14 @@ pkgs.testers.nixosTest {
     manager =
       { ... }:
       {
-        imports = [ ../nix/module.nix ];
+        imports = [ ../nix/modules ];
 
         virtualisation.diskSize = 4096;
         virtualisation.memorySize = 2048;
         services.wazuh.manager = {
           enable = true;
           requireIndexer = false;
-          config = builtins.readFile ./manager-standalone-ossec.conf;
+          config = builtins.readFile ./fixtures/manager-standalone-ossec.conf;
         };
       };
   };

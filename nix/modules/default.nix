@@ -1,4 +1,8 @@
+{ pkgs, ... }:
+
 {
+  _module.args.wazuhPackages = import ../packages.nix { inherit pkgs; };
+
   imports = [
     ./common.nix
     ./certificates.nix

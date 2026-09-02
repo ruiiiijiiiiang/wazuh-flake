@@ -2,6 +2,7 @@
   config,
   lib,
   pkgs,
+  wazuhPackages,
   ...
 }:
 
@@ -36,10 +37,6 @@ let
       else
         "${certificateCfg.stateDir}/admin-key.pem";
   };
-  packages = import ../packages.nix {
-    inherit pkgs;
-    version = wazuhCfg.version;
-  };
   indexerConfigFile = pkgs.writeText "wazuh-indexer.yml" cfg.config;
   indexerHealthHost =
     if cfg.bindAddress == "0.0.0.0" then
@@ -56,7 +53,7 @@ in
     enable = lib.mkEnableOption "Wazuh indexer";
     package = lib.mkOption {
       type = lib.types.package;
-      default = packages.indexer;
+      default = wazuhPackages.indexer;
     };
     dataDir = lib.mkOption {
       type = lib.types.path;

@@ -10,7 +10,7 @@ pkgs.testers.nixosTest {
   nodes.secure =
     { lib, ... }:
     {
-      imports = [ ../nix/module.nix ];
+      imports = [ ../nix/modules ];
 
       networking.hostName = "secure";
       virtualisation = {

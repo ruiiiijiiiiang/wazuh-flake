@@ -2,16 +2,13 @@
   config,
   lib,
   pkgs,
+  wazuhPackages,
   ...
 }:
 
 let
   wazuhCfg = config.services.wazuh;
   cfg = wazuhCfg.agent;
-  packages = import ../packages.nix {
-    inherit pkgs;
-    version = wazuhCfg.version;
-  };
   agentConfig =
     if cfg.config != "" then
       cfg.config
@@ -31,14 +28,14 @@ let
           (toString cfg.enrollmentPort)
           cfg.extraConfig
         ]
-        (lib.readFile ../ossec.conf);
+        (lib.readFile ../templates/agent-ossec.conf);
 in
 {
   options.services.wazuh.agent = {
     enable = lib.mkEnableOption "Wazuh agent";
     package = lib.mkOption {
       type = lib.types.package;
-      default = packages.agent;
+      default = wazuhPackages.agent;
       description = "Wazuh agent package.";
     };
     managerAddress = lib.mkOption {

@@ -9,7 +9,7 @@ pkgs.testers.nixosTest {
   nodes.central =
     { lib, ... }:
     {
-      imports = [ ../nix/module.nix ];
+      imports = [ ../nix/modules ];
 
       networking.hostName = "central";
       virtualisation = {

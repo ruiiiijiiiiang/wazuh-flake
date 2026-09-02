@@ -2,6 +2,7 @@
   config,
   lib,
   pkgs,
+  wazuhPackages,
   ...
 }:
 
@@ -27,16 +28,12 @@ let
       else
         "${certificateCfg.stateDir}/filebeat-key.pem";
   };
-  packages = import ../packages.nix {
-    inherit pkgs;
-    version = wazuhCfg.version;
-  };
   filebeatConfig =
     if cfg.config != "" then
       cfg.config
     else
       lib.replaceStrings [ "@CONFIG_DIR@" "@INDEXER_URL@" ] [ cfg.configDir cfg.indexerUrl ] (
-        lib.readFile ../filebeat.yml
+        lib.readFile ../templates/filebeat.yml
       );
   filebeatConfigFile = pkgs.writeText "wazuh-filebeat.yml" filebeatConfig;
 in
@@ -45,7 +42,7 @@ in
     enable = lib.mkEnableOption "Wazuh Filebeat alert forwarding";
     package = lib.mkOption {
       type = lib.types.package;
-      default = packages.filebeat;
+      default = wazuhPackages.filebeat;
       description = "Filebeat package with the Wazuh module and index template.";
     };
     configDir = lib.mkOption {

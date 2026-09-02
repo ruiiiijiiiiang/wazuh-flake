@@ -1,23 +1,13 @@
-{
-  config,
-  lib,
-  ...
-}:
+{ lib, ... }:
 
 let
-  cfg = config.services.wazuh;
+  release = import ../release.nix;
 in
 {
   options.services.wazuh.version = lib.mkOption {
     type = lib.types.str;
-    default = "4.14.7";
-    description = "Wazuh version shared by all package defaults.";
+    readOnly = true;
+    default = release.version;
+    description = "Wazuh version packaged by this flake.";
   };
-
-  config.assertions = [
-    {
-      assertion = cfg.version == "4.14.7";
-      message = "Wazuh ${cfg.version} is not packaged by this flake yet.";
-    }
-  ];
 }

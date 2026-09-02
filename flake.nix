@@ -29,13 +29,7 @@
       );
 
       nixosModules = {
-        default = import ./nix/module.nix;
-        wazuh = import ./nix/module.nix;
-        agent = import ./nix/module.nix;
-        manager = import ./nix/module.nix;
-        indexer = import ./nix/module.nix;
-        dashboard = import ./nix/module.nix;
-        filebeat = import ./nix/module.nix;
+        default = import ./nix/modules;
       };
 
       checks = forAllSystems (

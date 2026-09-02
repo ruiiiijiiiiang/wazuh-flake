@@ -2,6 +2,7 @@
   config,
   lib,
   pkgs,
+  wazuhPackages,
   ...
 }:
 
@@ -9,10 +10,6 @@ let
   wazuhCfg = config.services.wazuh;
   cfg = wazuhCfg.manager;
   credentialCfg = wazuhCfg.credentials.autoProvision;
-  packages = import ../packages.nix {
-    inherit pkgs;
-    version = wazuhCfg.version;
-  };
   managerStop = pkgs.writeShellScript "wazuh-manager-stop" /* bash */ ''
     set -eu
 
@@ -27,9 +24,9 @@ let
     done
 
     if [ "''${#modulesd_pids[@]}" -gt 0 ]; then
-      # Wazuh 4.14.7 aborts in the inventory teardown handler when the
-      # indexer integration is enabled. Avoid the faulty handler until the
-      # upstream binary provides a safe shutdown path.
+      # The packaged Wazuh release aborts in the inventory teardown handler
+      # when the indexer integration is enabled. Avoid the faulty handler until
+      # the upstream binary provides a safe shutdown path.
       kill -${if cfg.requireIndexer then "KILL" else "TERM"} "''${modulesd_pids[@]}"
 
       remaining=30
@@ -93,7 +90,7 @@ in
     enable = lib.mkEnableOption "Wazuh manager";
     package = lib.mkOption {
       type = lib.types.package;
-      default = packages.manager;
+      default = wazuhPackages.manager;
     };
     environmentFile = lib.mkOption {
       type = lib.types.nullOr lib.types.path;

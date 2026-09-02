@@ -6,7 +6,7 @@ pkgs.testers.nixosTest {
   nodes.manager =
     { ... }:
     {
-      imports = [ ../nix/module.nix ];
+      imports = [ ../nix/modules ];
 
       virtualisation = {
         diskSize = 4096;
@@ -16,7 +16,7 @@ pkgs.testers.nixosTest {
       services.wazuh.manager = {
         enable = true;
         requireIndexer = false;
-        config = builtins.readFile ./manager-standalone-ossec.conf;
+        config = builtins.readFile ./fixtures/manager-standalone-ossec.conf;
         environmentFile = "/run/wazuh-test/manager.env";
       };
 

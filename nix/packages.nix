@@ -8,7 +8,7 @@ let
   # Wazuh's official package repository uses amd64/arm64 for Debian packages.
   debArch = if pkgs.stdenv.hostPlatform.isAarch64 then "arm64" else "amd64";
   filebeatVersion = "7.10.2";
-  filebeatModuleVersion = "0.4";
+  filebeatModuleVersion = "0.5";
 
   componentHashes = release.hashes;
 

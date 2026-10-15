@@ -191,14 +191,40 @@ in
             set -eu
             install -d -m 0750 -o root -g wazuh /var/ossec /var/ossec/etc
             package_marker=/var/ossec/.wazuh-manager-package
-            if [ ! -f "$package_marker" ] || [ "$(cat "$package_marker")" != "${cfg.package}" ]; then
+            copy_marker=/var/ossec/.wazuh-manager-copy-version
+            # Repair installations prepared by the old size/mtime-based copy,
+            # even when their package marker already matches this derivation.
+            if [ ! -f "$package_marker" ] || [ "$(cat "$package_marker")" != "${cfg.package}" ] \
+              || [ ! -f "$copy_marker" ] || [ "$(cat "$copy_marker")" != 1 ]; then
               if [ -f /var/ossec/etc/client.keys ]; then
                 install -m 0640 /var/ossec/etc/client.keys /run/wazuh-manager-client.keys
               fi
-              ${pkgs.rsync}/bin/rsync -a --no-owner --no-group \
+              # Nix store files have normalized mtimes. Changed shebangs and
+              # ELF references can have the same size, so always transfer them.
+              ${pkgs.rsync}/bin/rsync -a --ignore-times --no-owner --no-group \
                 --exclude='/framework/python' \
                 --exclude='/tmp/vd_*_vd_*.tar*' \
+                --exclude='/etc/ossec.conf' \
+                --exclude='/etc/local_internal_options.conf' \
+                --exclude='/etc/rules/local_rules.xml' \
+                --exclude='/etc/decoders/local_decoder.xml' \
+                --exclude='/etc/shared/default/agent.conf' \
+                --exclude='/api/configuration/api.yaml' \
                 ${cfg.package}/var/ossec/ /var/ossec/
+
+              # Seed local configuration only when absent. Keep operator edits
+              # during upgrades and repair; cfg.config is installed below.
+              for config_file in \
+                etc/ossec.conf \
+                etc/local_internal_options.conf \
+                etc/rules/local_rules.xml \
+                etc/decoders/local_decoder.xml \
+                etc/shared/default/agent.conf \
+                api/configuration/api.yaml; do
+                if [ ! -e "/var/ossec/$config_file" ]; then
+                  install -D -m 0640 "${cfg.package}/var/ossec/$config_file" "/var/ossec/$config_file"
+                fi
+              done
 
               install -d -m 0750 -o root -g wazuh /var/ossec/framework
               if [ ! -L /var/ossec/framework/python ]; then
@@ -255,6 +281,9 @@ in
             printf '%s\n' "${cfg.package}" > "$package_marker"
             chown root:wazuh "$package_marker"
             chmod 0640 "$package_marker"
+            printf '1\n' > "$copy_marker"
+            chown root:wazuh "$copy_marker"
+            chmod 0640 "$copy_marker"
             log_file=/var/ossec/logs/ossec.log
             log_offset=0
             fingerprint_size=0

@@ -1,52 +1,108 @@
-{ pkgs }:
+{
+  pkgs,
+  upgradeFrom ? null,
+}:
 
 let
   indexerPasswordFile = pkgs.writeText "wazuh-test-indexer-password" "Native-Indexer-Test1!\n";
+  upgrading = upgradeFrom != null;
+  currentPackages = import ../nix/packages.nix { inherit pkgs; };
+  previousPackages = import ../nix/packages.nix {
+    inherit pkgs;
+    release = upgradeFrom;
+  };
+  centralComponents = [
+    "manager"
+    "indexer"
+    "dashboard"
+    "filebeat"
+  ];
 in
 pkgs.testers.nixosTest {
-  name = "wazuh-central-stack";
+  name = "wazuh-central-stack" + pkgs.lib.optionalString upgrading "-upgrade";
 
-  nodes.central =
-    { lib, ... }:
-    {
+  nodes = {
+    central =
+      { lib, ... }:
+      {
+        imports = [ ../nix/modules ];
+
+        networking.hostName = "central";
+        virtualisation = {
+          cores = 4;
+          diskSize = 24576;
+          memorySize = 6144;
+        };
+
+        services.wazuh = lib.mkMerge [
+          {
+            certificates.autoProvision.enable = true;
+            credentials.autoProvision = {
+              enable = true;
+              inherit indexerPasswordFile;
+            };
+
+            manager = {
+              enable = true;
+            };
+
+            filebeat = {
+              enable = true;
+            };
+
+            indexer = {
+              enable = true;
+              securityBootstrap = {
+                enable = true;
+              };
+            };
+
+            dashboard = {
+              enable = true;
+            };
+          }
+          (lib.optionalAttrs upgrading (
+            lib.genAttrs centralComponents (name: {
+              package = lib.mkDefault previousPackages.${name};
+            })
+          ))
+        ];
+
+        specialisation = lib.optionalAttrs upgrading {
+          upgraded.configuration.services.wazuh = lib.genAttrs centralComponents (name: {
+            package = lib.mkForce currentPackages.${name};
+          });
+        };
+
+        systemd.services.wazuh-dashboard.wantedBy = lib.mkForce [ ];
+      };
+  }
+  // pkgs.lib.optionalAttrs upgrading {
+    agent = { lib, nodes, ... }: {
       imports = [ ../nix/modules ];
-
-      networking.hostName = "central";
-      virtualisation = {
-        cores = 4;
-        diskSize = 24576;
-        memorySize = 6144;
+      networking.hostName = "upgrade-agent";
+      services.wazuh.agent = {
+        enable = true;
+        package = previousPackages.agent;
+        managerAddress = nodes.central.networking.primaryIPAddress;
+        extraConfig = /* xml */ ''
+          <wodle name="syscollector">
+            <disabled>no</disabled>
+            <interval>1m</interval>
+            <scan_on_start>yes</scan_on_start>
+            <hardware>yes</hardware>
+            <os>yes</os>
+            <packages>no</packages>
+            <network>no</network>
+            <ports all="no">no</ports>
+            <processes>no</processes>
+          </wodle>
+        '';
       };
-
-      services.wazuh = {
-        certificates.autoProvision.enable = true;
-        credentials.autoProvision = {
-          enable = true;
-          inherit indexerPasswordFile;
-        };
-
-        manager = {
-          enable = true;
-        };
-
-        filebeat = {
-          enable = true;
-        };
-
-        indexer = {
-          enable = true;
-          securityBootstrap = {
-            enable = true;
-          };
-        };
-
-        dashboard = {
-          enable = true;
-        };
-      };
-
-      systemd.services.wazuh-dashboard.wantedBy = lib.mkForce [ ];
+      specialisation.upgraded.configuration.services.wazuh.agent.package =
+        lib.mkForce currentPackages.agent;
     };
+  };
 
   testScript = ''
     from datetime import timedelta
@@ -136,6 +192,23 @@ pkgs.testers.nixosTest {
         timeout=poll_timeout,
     )
 
+  ''
+  + pkgs.lib.optionalString upgrading ''
+    def wait_for_enrolled_agent():
+        try:
+            central.wait_until_succeeds(
+                "/var/ossec/bin/agent_control -l | grep -E 'Name: upgrade-agent, IP: any, Active$'",
+                timeout=poll_timeout,
+            )
+        except Exception:
+            print(agent.execute("cat /var/ossec/etc/ossec.conf; tail -n 100 /var/ossec/logs/ossec.log; ip -4 address")[1])
+            print(central.execute("/var/ossec/bin/agent_control -l; tail -n 100 /var/ossec/logs/ossec.log")[1])
+            raise
+
+    agent.wait_for_unit("wazuh-agent.service", timeout=service_timeout)
+    wait_for_enrolled_agent()
+  ''
+  + ''
     central.succeed("systemctl restart wazuh-dashboard.service")
     central.wait_for_unit("wazuh-dashboard.service", timeout=service_timeout)
     central.wait_until_succeeds(
@@ -214,5 +287,97 @@ pkgs.testers.nixosTest {
     central.succeed(
         "! journalctl --boot --no-pager -t systemd-coredump | grep -F wazuh-modulesd"
     )
+  ''
+  + pkgs.lib.optionalString upgrading ''
+    with subtest("preserve a populated 4.14.8 installation across the central upgrade"):
+        wait_for_enrolled_agent()
+        agent.succeed("sha256sum /var/ossec/etc/client.keys > /tmp/enrollment.before")
+        central.succeed(
+            "sha256sum /var/ossec/etc/client.keys /var/ossec/etc/sslmanager.cert "
+            "/var/ossec/etc/sslmanager.key /var/ossec/etc/ossec.conf /var/lib/wazuh-credentials/internal.env "
+            "/var/lib/wazuh-certificates/*.pem > /tmp/identity.before"
+        )
+        central.succeed("grep -q 4.14.8 /var/ossec/.wazuh-manager-package")
+        agent.succeed("grep -q 4.14.8 /var/ossec/.wazuh-agent-package")
+        central.wait_until_succeeds(
+            ". /run/wazuh-credentials/credentials.env; curl --fail --silent "
+            "--cacert /var/lib/wazuh-certificates/root-ca.pem --user \"$INDEXER_USERNAME:$INDEXER_PASSWORD\" "
+            "--header 'Content-Type: application/json' "
+            "--data '{\"query\":{\"term\":{\"agent.name\":\"upgrade-agent\"}}}' "
+            "'https://127.0.0.1:9200/wazuh-states-inventory-hardware-*/_count' | "
+            "${pkgs.jq}/bin/jq -e '.count >= 1'",
+            timeout=service_timeout,
+        )
+        # Stop writers before switching this single-node indexer. The new
+        # generation's startup ordering brings the central services back up.
+        central.succeed("systemctl stop wazuh-dashboard.service wazuh-filebeat.service wazuh-manager.service")
+        central.succeed("/run/current-system/specialisation/upgraded/bin/switch-to-configuration test")
+        central.succeed("systemctl start wazuh-manager.service wazuh-filebeat.service wazuh-dashboard.service")
+        for service in ["wazuh-indexer", "wazuh-indexer-security", "wazuh-manager", "wazuh-filebeat", "wazuh-dashboard"]:
+            central.wait_for_unit(service + ".service", timeout=service_timeout)
+        central.succeed("grep -q 4.14.9 /var/ossec/.wazuh-manager-package")
+        central.succeed("sha256sum --check /tmp/identity.before")
+        central.wait_until_succeeds(
+            ". /run/wazuh-credentials/credentials.env; curl --fail --silent "
+            "--cacert /var/lib/wazuh-certificates/root-ca.pem --user \"$INDEXER_USERNAME:$INDEXER_PASSWORD\" "
+            "'https://127.0.0.1:9200/_cluster/health?wait_for_status=green&timeout=60s' | "
+            "${pkgs.jq}/bin/jq -e '.status == \"green\"'",
+            timeout=service_timeout,
+        )
+        for account in ["API", "API_ADMIN"]:
+            credentials = "$" + account + "_USERNAME:$" + account + "_PASSWORD"
+            central.wait_until_succeeds(
+                ". /run/wazuh-credentials/credentials.env; curl --fail --silent --insecure "
+                f"--user \"{credentials}\" "
+                "--request POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' | grep -q .",
+                timeout=poll_timeout,
+            )
+        central.wait_until_succeeds(
+            ". /run/wazuh-credentials/credentials.env; curl --fail --silent "
+            "--user \"$INDEXER_USERNAME:$INDEXER_PASSWORD\" http://127.0.0.1:5601/api/status >/dev/null",
+            timeout=poll_timeout,
+        )
+        wait_for_enrolled_agent()
+        # The old agent remains connected until the manager has been upgraded.
+        agent.succeed("grep -q 4.14.8 /var/ossec/.wazuh-agent-package")
+        agent.succeed("/run/current-system/specialisation/upgraded/bin/switch-to-configuration test")
+        agent.wait_for_unit("wazuh-agent.service", timeout=service_timeout)
+        agent.succeed("grep -q 4.14.9 /var/ossec/.wazuh-agent-package")
+        agent.succeed("sha256sum --check /tmp/enrollment.before")
+        wait_for_enrolled_agent()
+        central.wait_until_succeeds(
+            ". /run/wazuh-credentials/credentials.env; curl --fail --silent "
+            "--cacert /var/lib/wazuh-certificates/root-ca.pem --user \"$INDEXER_USERNAME:$INDEXER_PASSWORD\" "
+            "--header 'Content-Type: application/json' "
+            "--data '{\"query\":{\"bool\":{\"filter\":[{\"term\":{\"agent.name\":\"upgrade-agent\"}},{\"term\":{\"agent.version\":\"v4.14.9\"}}]}}}' "
+            "'https://127.0.0.1:9200/wazuh-states-inventory-hardware-*/_count' | "
+            "${pkgs.jq}/bin/jq -e '.count >= 1'",
+            timeout=service_timeout,
+        )
+        central.succeed(
+            "printf '%s\\n' "
+            "'{\"timestamp\":\"2026-10-14T12:00:00.000+0000\",\"rule\":{\"level\":3,\"description\":\"upgrade test\",\"id\":\"100003\",\"groups\":[\"test\"]},\"agent\":{\"id\":\"000\",\"name\":\"central\"},\"manager\":{\"name\":\"central\"},\"id\":\"1791979200.3\",\"full_log\":\"native-central-stack-upgrade-test\",\"decoder\":{\"name\":\"json\"},\"location\":\"nixos-test\"}' "
+            ">> /var/ossec/logs/alerts/alerts.json"
+        )
+        central.wait_until_succeeds(
+            ". /run/wazuh-credentials/credentials.env; curl --fail --silent "
+            "--cacert /var/lib/wazuh-certificates/root-ca.pem --user \"$INDEXER_USERNAME:$INDEXER_PASSWORD\" "
+            "--header 'Content-Type: application/json' "
+            "--data '{\"query\":{\"match_phrase\":{\"full_log\":\"native-central-stack-upgrade-test\"}}}' "
+            "'https://127.0.0.1:9200/wazuh-alerts-4.x-*/_count' | "
+            "${pkgs.jq}/bin/jq -e '.count >= 1'",
+            timeout=poll_timeout,
+        )
+        # Previously indexed events must survive the indexer upgrade too.
+        central.succeed(
+            ". /run/wazuh-credentials/credentials.env; curl --fail --silent "
+            "--cacert /var/lib/wazuh-certificates/root-ca.pem --user \"$INDEXER_USERNAME:$INDEXER_PASSWORD\" "
+            "--header 'Content-Type: application/json' "
+            "--data '{\"query\":{\"match_phrase\":{\"full_log\":\"native-central-stack-restart-test\"}}}' "
+            "'https://127.0.0.1:9200/wazuh-alerts-4.x-*/_count' | "
+            "${pkgs.jq}/bin/jq -e '.count >= 1'"
+        )
+        central.succeed("! journalctl --boot --dmesg --no-pager | grep -E 'wazuh-modulesd.*segfault'")
+        central.succeed("! journalctl --boot --no-pager -t systemd-coredump | grep -F wazuh-modulesd")
   '';
 }

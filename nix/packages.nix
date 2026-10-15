@@ -1,8 +1,10 @@
-{ pkgs }:
+{
+  pkgs,
+  release ? import ./release.nix,
+}:
 
 let
   inherit (pkgs) lib;
-  release = import ./release.nix;
   inherit (release) version;
 
   # Wazuh's official package repository uses amd64/arm64 for Debian packages.

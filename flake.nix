@@ -44,6 +44,10 @@
           manager-secret-isolation = import ./tests/manager-secret-isolation.nix { inherit pkgs; };
           security-bootstrap = import ./tests/security-bootstrap.nix { inherit pkgs; };
           central-stack = import ./tests/central-stack.nix { inherit pkgs; };
+          central-stack-upgrade = import ./tests/central-stack.nix {
+            inherit pkgs;
+            upgradeFrom = import ./tests/fixtures/release-4.14.8.nix;
+          };
         }
       );
 

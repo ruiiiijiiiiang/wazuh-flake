@@ -9,7 +9,7 @@ projects from source.
 
 ## Status
 
-The package URLs and hashes are pinned by `nix/release.nix` for x86_64-linux
+Wazuh 4.14.9 package URLs and hashes are pinned by `nix/release.nix` for x86_64-linux
 and aarch64-linux. All central components are kept at the same patch version.
 The packaged release includes the
 [vulnerability-scanner shutdown fix](https://github.com/wazuh/wazuh/pull/36011);
@@ -34,6 +34,10 @@ initializes OpenSearch security, replaces both default manager API passwords,
 authenticates with the provisioned credentials, starts the dashboard, forwards
 an alert through Filebeat, verifies the resulting index, restarts every central
 service, and verifies API and alert-pipeline recovery afterward.
+A stateful upgrade test starts the central stack and an enrolled agent on
+4.14.8, upgrades the central stack to 4.14.9 before the agent, and verifies
+preserved enrollment, configuration, certificates, credentials, indexed alerts,
+and renewed inventory and alert delivery.
 
 Certificate and credential provisioning can be delegated to the flake for
 standalone central stacks. It generates a persistent local CA, service
@@ -355,17 +359,30 @@ and all certificates issued by it as one coordinated maintenance operation.
 
 Treat a Wazuh update as an atomic central-stack change:
 
-1. Update the shared Wazuh version and every architecture-specific release
-   hash in `nix/packages.nix`. Update Filebeat inputs only when Wazuh's release
+1. Update the shared Wazuh version and every architecture-specific Wazuh release
+   hash in `nix/release.nix`. Update Filebeat inputs only when Wazuh's release
    requires it.
 2. Build all packages and run the security-bootstrap, manager lifecycle, secret
    isolation, and central-stack tests.
+   Run the stateful central-stack upgrade test against the previous release too.
 3. Take the required manager backup and, when alert retention matters, an
    indexer snapshot.
 4. Deploy the indexer, manager, Filebeat, and dashboard from the same flake
    revision. Upgrade agents afterward and never make them newer than the
    manager.
 5. Verify unit state, all three authenticated APIs, and delivery of a new alert.
+
+Manager package refreshes replace packaged files even when their sizes and
+timestamps match: Nix-normalized timestamps cannot identify changed interpreter
+or library paths. The first start with this module also refreshes installations
+created by the previous copy logic, even if their package marker already
+matches. Enrollment keys and certificates are retained, and an existing
+`ossec.conf` is preserved unless `services.wazuh.manager.config` supplies a
+replacement. Merge new upstream configuration defaults into retained or custom
+XML as appropriate. Local rules, decoders, internal options, shared agent
+configuration, and API configuration are also retained. Bundled Python and
+vulnerability archives remain linked from the store and are not copied by this
+repair.
 
 A NixOS generation rollback restores packages and unit definitions, but it
 does not roll mutable state back. Do not start an older indexer against data
@@ -382,4 +399,5 @@ nix build .#checks.x86_64-linux.manager-secret-isolation
 nix build .#checks.x86_64-linux.manager-restart-stress
 nix build .#checks.x86_64-linux.security-bootstrap
 nix build .#checks.x86_64-linux.central-stack
+nix build .#checks.x86_64-linux.central-stack-upgrade
 ```

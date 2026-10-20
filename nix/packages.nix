@@ -135,16 +135,30 @@ let
     ];
   };
 
-  dashboard = unpackDeb {
-    pname = "wazuh-dashboard";
-    src = fetchWazuhDeb {
-      name = "wazuh-dashboard";
-      fileName = "wazuh-dashboard_${version}-1_${debArch}.deb";
-      sha256 = componentHashes.${debArch}.dashboard;
-    };
-    patchNativeBinaries = true;
-    extraBuildInputs = [ pkgs.stdenv.cc.cc.lib ];
-  };
+  dashboard =
+    (unpackDeb {
+      pname = "wazuh-dashboard";
+      src = fetchWazuhDeb {
+        name = "wazuh-dashboard";
+        fileName = "wazuh-dashboard_${version}-1_${debArch}.deb";
+        sha256 = componentHashes.${debArch}.dashboard;
+      };
+      patchNativeBinaries = true;
+      extraBuildInputs = [ pkgs.stdenv.cc.cc.lib ];
+    }).overrideAttrs
+      {
+        # Sorting overlapping PT_LOAD segments can map Node's relocated .dynamic
+        # section read-only, crashing the ELF loader before Node starts.
+        patchelfFlags = [ "--no-sort" ];
+        doInstallCheck = pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform;
+        installCheckPhase = /* bash */ ''
+          runHook preInstallCheck
+          ulimit -c 0
+          "$out/usr/share/wazuh-dashboard/node/bin/node" --version
+          "$out/usr/share/wazuh-dashboard/node/bin/node" -e 'process.exit(0)'
+          runHook postInstallCheck
+        '';
+      };
 
   filebeatModule = pkgs.fetchurl {
     url = "https://packages.wazuh.com/4.x/filebeat/wazuh-filebeat-${filebeatModuleVersion}.tar.gz";

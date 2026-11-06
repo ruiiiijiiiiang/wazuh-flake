@@ -46,7 +46,7 @@
           central-stack = import ./tests/central-stack.nix { inherit pkgs; };
           central-stack-upgrade = import ./tests/central-stack.nix {
             inherit pkgs;
-            upgradeFrom = import ./tests/fixtures/release-4.14.8.nix;
+            upgradeFrom = import ./tests/fixtures/release-4.14.9.nix;
           };
         }
       );

@@ -9,7 +9,7 @@ projects from source.
 
 ## Status
 
-Wazuh 4.14.9 package URLs and hashes are pinned by `nix/release.nix` for x86_64-linux
+Wazuh 4.14.10 package URLs and hashes are pinned by `nix/release.nix` for x86_64-linux
 and aarch64-linux. All central components are kept at the same patch version.
 The packaged release includes the
 [vulnerability-scanner shutdown fix](https://github.com/wazuh/wazuh/pull/36011);
@@ -35,7 +35,7 @@ authenticates with the provisioned credentials, starts the dashboard, forwards
 an alert through Filebeat, verifies the resulting index, restarts every central
 service, and verifies API and alert-pipeline recovery afterward.
 A stateful upgrade test starts the central stack and an enrolled agent on
-4.14.8, upgrades the central stack to 4.14.9 before the agent, and verifies
+4.14.9, upgrades the central stack to 4.14.10 before the agent, and verifies
 preserved enrollment, configuration, certificates, credentials, indexed alerts,
 and renewed inventory and alert delivery.
 

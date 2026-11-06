@@ -289,7 +289,7 @@ pkgs.testers.nixosTest {
     )
   ''
   + pkgs.lib.optionalString upgrading ''
-    with subtest("preserve a populated 4.14.8 installation across the central upgrade"):
+    with subtest("preserve a populated ${upgradeFrom.version} installation across the central upgrade"):
         wait_for_enrolled_agent()
         agent.succeed("sha256sum /var/ossec/etc/client.keys > /tmp/enrollment.before")
         central.succeed(
@@ -297,8 +297,8 @@ pkgs.testers.nixosTest {
             "/var/ossec/etc/sslmanager.key /var/ossec/etc/ossec.conf /var/lib/wazuh-credentials/internal.env "
             "/var/lib/wazuh-certificates/*.pem > /tmp/identity.before"
         )
-        central.succeed("grep -q 4.14.8 /var/ossec/.wazuh-manager-package")
-        agent.succeed("grep -q 4.14.8 /var/ossec/.wazuh-agent-package")
+        central.succeed("grep -Fq ${upgradeFrom.version} /var/ossec/.wazuh-manager-package")
+        agent.succeed("grep -Fq ${upgradeFrom.version} /var/ossec/.wazuh-agent-package")
         central.wait_until_succeeds(
             ". /run/wazuh-credentials/credentials.env; curl --fail --silent "
             "--cacert /var/lib/wazuh-certificates/root-ca.pem --user \"$INDEXER_USERNAME:$INDEXER_PASSWORD\" "
@@ -315,7 +315,7 @@ pkgs.testers.nixosTest {
         central.succeed("systemctl start wazuh-manager.service wazuh-filebeat.service wazuh-dashboard.service")
         for service in ["wazuh-indexer", "wazuh-indexer-security", "wazuh-manager", "wazuh-filebeat", "wazuh-dashboard"]:
             central.wait_for_unit(service + ".service", timeout=service_timeout)
-        central.succeed("grep -q 4.14.9 /var/ossec/.wazuh-manager-package")
+        central.succeed("grep -Fq ${currentPackages.manager.version} /var/ossec/.wazuh-manager-package")
         central.succeed("sha256sum --check /tmp/identity.before")
         central.wait_until_succeeds(
             ". /run/wazuh-credentials/credentials.env; curl --fail --silent "
@@ -339,17 +339,17 @@ pkgs.testers.nixosTest {
         )
         wait_for_enrolled_agent()
         # The old agent remains connected until the manager has been upgraded.
-        agent.succeed("grep -q 4.14.8 /var/ossec/.wazuh-agent-package")
+        agent.succeed("grep -Fq ${upgradeFrom.version} /var/ossec/.wazuh-agent-package")
         agent.succeed("/run/current-system/specialisation/upgraded/bin/switch-to-configuration test")
         agent.wait_for_unit("wazuh-agent.service", timeout=service_timeout)
-        agent.succeed("grep -q 4.14.9 /var/ossec/.wazuh-agent-package")
+        agent.succeed("grep -Fq ${currentPackages.agent.version} /var/ossec/.wazuh-agent-package")
         agent.succeed("sha256sum --check /tmp/enrollment.before")
         wait_for_enrolled_agent()
         central.wait_until_succeeds(
             ". /run/wazuh-credentials/credentials.env; curl --fail --silent "
             "--cacert /var/lib/wazuh-certificates/root-ca.pem --user \"$INDEXER_USERNAME:$INDEXER_PASSWORD\" "
             "--header 'Content-Type: application/json' "
-            "--data '{\"query\":{\"bool\":{\"filter\":[{\"term\":{\"agent.name\":\"upgrade-agent\"}},{\"term\":{\"agent.version\":\"v4.14.9\"}}]}}}' "
+            "--data '{\"query\":{\"bool\":{\"filter\":[{\"term\":{\"agent.name\":\"upgrade-agent\"}},{\"term\":{\"agent.version\":\"v${currentPackages.agent.version}\"}}]}}}' "
             "'https://127.0.0.1:9200/wazuh-states-inventory-hardware-*/_count' | "
             "${pkgs.jq}/bin/jq -e '.count >= 1'",
             timeout=service_timeout,
